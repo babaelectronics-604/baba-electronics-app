@@ -13,20 +13,20 @@
 
 const firebaseConfig = {
   apiKey: "AIzaSyDFv35dJalFNGgm6T7oMVSx0D3jhXkrJZI",
-    authDomain: "baba-electronics-2026.firebaseapp.com",
-    projectId: "baba-electronics-2026",
-    storageBucket: "baba-electronics-2026.firebasestorage.app",
-    messagingSenderId: "1055377430450",
-    appId: "1:1055377430450:web:c0f885e250bd860e4776ab",
-    measurementId: "G-78S1RSJEX7"
+  authDomain: "baba-electronics-2026.firebaseapp.com",
+  projectId: "baba-electronics-2026",
+  storageBucket: "baba-electronics-2026.firebasestorage.app",
+  messagingSenderId: "1055377430450",
+  appId: "1:1055377430450:web:c0f885e250bd860e4776ab",
+  measurementId: "G-78S1RSJEX7",
 };
 
 let db = null;
 let auth = null;
 
-// Only initializes if the placeholder values above have been replaced.
+// Only initializes once a real key has been filled in above.
 // This lets the rest of the site keep working even before Firebase is set up.
-if (firebaseConfig.apiKey !== "AIzaSyDFv35dJalFNGgm6T7oMVSx0D3jhXkrJZI") {
+if (firebaseConfig.apiKey && !firebaseConfig.apiKey.startsWith("YOUR_")) {
   firebase.initializeApp(firebaseConfig);
   db = firebase.firestore();
   auth = firebase.auth();
