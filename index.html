@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Baba Electronics & Electricals | Electrical & Electronics Store in Siwan</title>
+<meta name="description" content="Shop electrical, lighting, fan, cable, appliance and hardware materials at Baba Electronics & Electricals, Panna Market, Siwan, Bihar." />
+
+<meta property="og:type" content="website" />
+<meta property="og:title" content="Baba Electronics & Electricals | Siwan, Bihar" />
+<meta property="og:description" content="Electrical, lighting, fan, cable, appliance and hardware materials — retail, wholesale, home delivery and online ordering." />
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sora:wght@600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ================= HEADER ================= -->
+<header class="site-header">
+  <div class="wrap header-main">
+    <div class="brand">
+      <div class="brand-mark">
+        <img src="logo.png" alt="Baba Electronics & Electricals logo" />
+      </div>
+      <span class="brand-name">Baba Electronics &amp; Electricals</span>
+    </div>
+
+    <nav class="desktop-nav">
+      <button class="nav-link is-current" id="nav-home">Home</button>
+      <button class="nav-link" id="nav-categories">Categories</button>
+      <button class="nav-link" id="nav-deals">Hot Deals</button>
+      <button class="nav-link" id="nav-orders">My Orders</button>
+    </nav>
+
+    <div class="header-actions">
+      <button class="icon-btn" id="menu-toggle" aria-label="Open menu" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+      <button class="icon-btn accent" id="cart-toggle" aria-label="Open cart">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/>
+          <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
+        </svg>
+        <span class="cart-badge" id="cart-count" hidden>0</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="wrap mobile-nav" id="mobile-nav">
+    <button id="nav-home-m" onclick="document.getElementById('nav-home').click()">Home</button>
+    <button onclick="document.getElementById('nav-categories').click()">Categories</button>
+    <button onclick="document.getElementById('nav-deals').click()">Hot Deals</button>
+    <button onclick="document.getElementById('nav-orders').click()">My Orders</button>
+  </div>
+</header>
+
+<!-- ================= HERO ================= -->
+<section class="hero">
+  <div class="wrap">
+    <div class="hero-row">
+      <div class="hero-copy">
+        <p class="eyebrow">PANNA MARKET · SIWAN · BIHAR</p>
+        <h1 class="hero-title">Powering Siwan, every day.</h1>
+        <p class="hero-desc">Electronics and electrical materials for retail, wholesale, home delivery and online ordering.</p>
+      </div>
+      <div class="hero-note">
+        <h3>Retail &amp; wholesale supply</h3>
+        <p>Serving homes, shops, worksites and housing projects across Siwan.</p>
+        <button class="btn-ghost" data-contact="a bulk / wholesale order">Ask about wholesale rates</button>
+      </div>
+    </div>
+
+    <div class="search-box">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="text" id="search-input" placeholder="Search fans, bulbs, wires, cables, tools…" />
+    </div>
+  </div>
+</section>
+
+<!-- ================= CATEGORIES ================= -->
+<section class="categories-section" id="categories">
+  <div class="wrap">
+    <div class="section-heading">
+      <h2>Browse by department</h2>
+      <button class="text-link" id="view-all-categories">View all categories</button>
+    </div>
+    <div class="category-grid" id="category-grid"></div>
+  </div>
+</section>
+
+<!-- ================= PRODUCT GRID ================= -->
+<section class="shop-section" id="shop">
+  <div class="wrap">
+    <div class="section-heading">
+      <h2>Featured materials</h2>
+      <p class="rating-note">4.6 stars based on 8 reviews</p>
+    </div>
+    <div class="product-grid" id="product-grid"></div>
+    <p class="empty-state" id="empty-state" hidden>No products match your search. Try a different term, or <button class="text-link" data-contact="a product you couldn't find">ask us directly on WhatsApp</button>.</p>
+  </div>
+</section>
+
+<!-- ================= TRUST / BRANDS ================= -->
+<section class="trust-section">
+  <div class="wrap">
+    <h2 class="trust-title">Built by BABA. Powered by trusted brands.</h2>
+    <p class="trust-line">Manufactured brands: BABA Fans, SAC Fans and SSC Fans.</p>
+    <p class="trust-desc">We deal in and distribute Nippo, Orient, BABA, SSC, SAC, Altek, Fortuner, Paras, CG, Crompton, Kenstar and KVI.</p>
+    <p class="trust-rating">Rated 4.6 stars based on 8 reviews.</p>
+  </div>
+</section>
+
+<!-- ================= FOOTER ================= -->
+<footer class="site-footer">
+  <div class="wrap" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;width:100%;">
+    <p class="footer-address">Panna Market, Siwan, Bihar – 841226, India</p>
+    <p class="footer-links">Retail · Wholesale · Home delivery · Online ordering</p>
+    <button class="footer-contact" data-contact="">Chat with us on WhatsApp</button>
+    <a class="footer-admin-link" href="admin.html">Admin</a>
+  </div>
+</footer>
+
+<!-- ================= CART PANEL ================= -->
+<div class="overlay-scrim" id="overlay-scrim" hidden></div>
+<aside class="cart-panel" id="cart-panel" aria-label="Shopping cart">
+  <div class="cart-header">
+    <h2>Your cart</h2>
+    <button class="cart-close" id="cart-close" aria-label="Close cart">✕</button>
+  </div>
+  <div class="cart-body" id="cart-body"></div>
+  <div class="cart-footer" id="cart-footer" hidden>
+    <div class="cart-phone-row">
+      <label for="customer-name">Your name</label>
+      <input type="text" id="customer-name" placeholder="e.g. Taukir Ansari" />
+    </div>
+    <div class="cart-phone-row">
+      <label for="customer-phone">Your phone number (for order confirmation)</label>
+      <input type="tel" id="customer-phone" placeholder="e.g. 98765 43210" />
+    </div>
+    <div class="cart-total-row">
+      <span>Estimated total</span>
+      <span id="cart-total">₹0</span>
+    </div>
+    <button class="btn-whatsapp" id="checkout-pdf">Send order PDF to WhatsApp</button>
+    <button class="btn-secondary" id="checkout-whatsapp">Just download the PDF</button>
+  </div>
+</aside>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="products.js"></script>
+<script src="logo-data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

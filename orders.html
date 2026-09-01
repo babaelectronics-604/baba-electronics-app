@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>My Orders | Baba Electronics & Electricals</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sora:wght@600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap header-main">
+    <a class="brand" href="index.html" style="text-decoration:none;">
+      <div class="brand-mark">
+        <img src="logo.png" alt="Baba Electronics & Electricals logo" />
+      </div>
+      <span class="brand-name">Baba Electronics &amp; Electricals</span>
+    </a>
+  </div>
+</header>
+
+<main class="wrap simple-page">
+  <h1 class="page-title">My Orders</h1>
+  <p class="page-sub">Enter the phone number you used when placing an order to see its status and details.</p>
+
+  <div id="firebase-warning" class="state-message" hidden>
+    Order history isn't set up yet — the shop is still connecting this page to its order database.
+    Please check back soon, or contact the shop directly.
+  </div>
+
+  <form class="lookup-form" id="lookup-form">
+    <input type="tel" id="lookup-phone" placeholder="e.g. 98765 43210" required />
+    <button type="submit" class="btn-primary">Find my orders</button>
+  </form>
+
+  <div id="results"></div>
+</main>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script>
+function statusLabel(s) {
+  return { pending: "Pending", confirmed: "Confirmed", fulfilled: "Fulfilled", cancelled: "Cancelled" }[s] || s;
+}
+
+function formatPrice(price) {
+  if (price === null || price === undefined) return "Contact for price";
+  return "₹" + price.toLocaleString("en-IN");
+}
+
+function renderOrders(orders) {
+  const results = document.getElementById("results");
+  results.innerHTML = "";
+
+  if (orders.length === 0) {
+    results.innerHTML = `<p class="state-message">No orders found for that phone number. Double-check the number, or place a new order from the <a href="index.html">shop</a>.</p>`;
+    return;
+  }
+
+  orders.forEach((order) => {
+    const date = order.createdAt && order.createdAt.toDate ? order.createdAt.toDate() : null;
+    const dateStr = date ? date.toLocaleDateString("en-IN") + " · " + date.toLocaleTimeString("en-IN") : "";
+
+    const itemsStr = (order.items || [])
+      .map((it) => `${it.name} × ${it.qty}`)
+      .join(", ");
+
+    const card = document.createElement("div");
+    card.className = "order-card";
+    card.innerHTML = `
+      <div class="order-card-top">
+        <div>
+          <p class="order-ref">${order.orderNo}</p>
+          <p class="order-date">${dateStr}${order.customerName ? " · " + order.customerName : ""}</p>
+        </div>
+        <span class="status-badge status-${order.status || "pending"}">${statusLabel(order.status || "pending")}</span>
+      </div>
+      <p class="order-items">${itemsStr}</p>
+      <p class="order-total">${formatPrice(order.total)}${order.hasUnpriced ? " + items needing a quote" : ""}</p>
+    `;
+    results.appendChild(card);
+  });
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  if (!isFirebaseReady()) {
+    document.getElementById("firebase-warning").hidden = false;
+    document.getElementById("lookup-form").style.display = "none";
+    return;
+  }
+
+  document.getElementById("lookup-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const phone = document.getElementById("lookup-phone").value.trim();
+    if (!phone) return;
+
+    const results = document.getElementById("results");
+    results.innerHTML = `<p class="state-message">Searching…</p>`;
+
+    try {
+      const snapshot = await db
+        .collection("orders")
+        .where("customerPhone", "==", phone)
+        .orderBy("createdAt", "desc")
+        .get();
+      const orders = snapshot.docs.map((doc) => doc.data());
+      renderOrders(orders);
+    } catch (err) {
+      console.error(err);
+      results.innerHTML = `<p class="state-message">Something went wrong while searching. Please try again in a moment.</p>`;
+    }
+  });
+});
+</script>
+</body>
+</html>
