@@ -362,8 +362,30 @@ async function saveOrderToFirestore(orderNo, customerName, customerPhone, total,
   }
 }
 
-// Builds the order PDF in a receipt-style layout and returns
-// { doc, orderNo, total, hasUnpriced } without saving the file.
+// Turns a name/order-no into a safe filename fragment: trims, swaps
+// whitespace for underscores, and strips characters that aren't safe
+// in filenames across OSes.
+function sanitizeFilenamePart(str) {
+  return String(str || "")
+    .trim()
+    .replace(/\s+/g, "_")
+    .replace(/[^a-zA-Z0-9_\-]/g, "");
+}
+
+// Builds "CustomerName_BillNo_DD-MM-YYYY.pdf", e.g.
+// "Hareram_Tiwari_3005_01-09-2026.pdf".
+function buildOrderFilename(customerName, orderNo, date) {
+  const namePart = sanitizeFilenamePart(customerName) || "Customer";
+  const billPart = sanitizeFilenamePart(orderNo) || "Order";
+  const dd = String(date.getDate()).padStart(2, "0");
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const yyyy = date.getFullYear();
+  return `${namePart}_${billPart}_${dd}-${mm}-${yyyy}.pdf`;
+}
+
+// Builds the order PDF in a compact, print-friendly A4 layout designed to
+// fit at least 32 product rows on a single page. Returns
+// { doc, orderNo, total, hasUnpriced, filename } without saving the file.
 async function buildOrderPDF(customerName, customerPhone) {
   const ids = Object.keys(cart);
   if (ids.length === 0) return null;
@@ -377,156 +399,306 @@ async function buildOrderPDF(customerName, customerPhone) {
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   const now = new Date();
 
-  const marginX = 18;
+  // ---- Page geometry ----
   const pageWidth = 210;
-  let y = 20;
+  const pageHeight = 297;
+  const marginX = 12;
+  const marginTop = 10;
+  const marginBottom = 12;
+  const contentWidth = pageWidth - marginX * 2; // 186mm
+  const footerReserve = 5; // space kept clear above marginBottom for the footer
+  const maxItemY = pageHeight - marginBottom - footerReserve;
 
-  // ---- Logo + shop block ----
-  const logoSize = 22; // mm, square
-  let textX = marginX;
-  if (typeof LOGO_BASE64 !== "undefined") {
-    try {
-      doc.addImage(LOGO_BASE64, "PNG", marginX, y, logoSize, logoSize);
-      textX = marginX + logoSize + 6;
-    } catch (err) {
-      console.error("Could not add logo to PDF:", err);
-    }
-  }
+  // ---- Table column geometry (S.No 7% / Desc 42% / Brand 15% / Qty 7% / Price 14% / Subtotal 15%) ----
+  const colW = {
+    sno: contentWidth * 0.07,
+    desc: contentWidth * 0.42,
+    brand: contentWidth * 0.15,
+    qty: contentWidth * 0.07,
+    price: contentWidth * 0.14,
+    subtotal: contentWidth * 0.15,
+  };
+  const colX = {};
+  let cx = marginX;
+  ["sno", "desc", "brand", "qty", "price", "subtotal"].forEach((key) => {
+    colX[key] = cx;
+    cx += colW[key];
+  });
+  const colBoundaries = [
+    marginX,
+    colX.desc,
+    colX.brand,
+    colX.qty,
+    colX.price,
+    colX.subtotal,
+    marginX + contentWidth,
+  ];
 
-  let textY = y + 6;
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(15);
-  doc.text(CONFIG.shopName, textX, textY);
-  textY += 6;
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(10);
-  doc.text(CONFIG.shopAddress, textX, textY);
-  textY += 5;
-  doc.text(`Phone: +${CONFIG.whatsappNumber.slice(0, 2)} ${CONFIG.whatsappNumber.slice(2)}`, textX, textY);
+  const rowHeight = 6; // mm, target compact row height (spec range: 6-7mm)
+  const headerRowHeight = 7.5;
 
-  y = Math.max(y + logoSize, textY) + 6;
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(13);
-  doc.text("Order Request", marginX, y);
-  y += 8;
-
-  doc.setDrawColor(210);
-  doc.line(marginX, y, pageWidth - marginX, y);
-  y += 8;
-
-  // ---- Ordered By / Order Details (two columns) ----
-  const rightColX = 115;
-  const topY = y;
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(10);
-  doc.text("Ordered By:", marginX, y);
-  doc.text("Order Details:", rightColX, y);
-  y += 6;
-
-  doc.setFont("helvetica", "normal");
-  doc.text(customerName || "—", marginX, y);
-  doc.text(`No: ${orderNo}`, rightColX, y);
-  y += 5;
-
-  doc.text(`Contact No: ${customerPhone || "—"}`, marginX, y);
-  doc.text(`Date: ${now.toLocaleDateString("en-IN")}`, rightColX, y);
-  y += 5;
-
-  doc.text(`Time: ${now.toLocaleTimeString("en-IN")}`, rightColX, y);
-  y = Math.max(y, topY + 16) + 6;
-
-  doc.setDrawColor(210);
-  doc.line(marginX, y, pageWidth - marginX, y);
-  y += 9;
-
-  // ---- Items table ----
-  const col = { name: marginX, brand: 92, qty: 124, unit: 138, price: 163, subtotal: pageWidth - marginX };
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(10);
-  doc.text("Description", col.name, y);
-  doc.text("Brand", col.brand, y);
-  doc.text("Qty", col.qty, y);
-  doc.text("Unit", col.unit, y);
-  doc.text("Price", col.price, y);
-  doc.text("Subtotal", col.subtotal, y, { align: "right" });
-  y += 3;
-  doc.line(marginX, y, pageWidth - marginX, y);
-  y += 6;
-
-  doc.setFont("helvetica", "normal");
+  // ---- Compute totals up front ----
   let total = 0;
   let hasUnpriced = false;
+  const items = ids
+    .map((id) => {
+      const p = findProduct(id);
+      if (!p) return null;
+      const qty = cart[id];
+      const lineTotal = p.price === null ? null : p.price * qty;
+      if (lineTotal === null) hasUnpriced = true;
+      else total += lineTotal;
+      return { name: p.name, brand: p.brand || "—", qty, price: p.price, lineTotal };
+    })
+    .filter(Boolean);
 
-  ids.forEach((id) => {
-    const p = findProduct(id);
-    if (!p) return;
-    const qty = cart[id];
-    const lineTotal = p.price === null ? null : p.price * qty;
-    if (lineTotal === null) hasUnpriced = true;
-    else total += lineTotal;
+  // ---- Compact page header (shop block + title) ----
+  // Full version on page 1 (~21mm incl. divider); a slimmer version repeats
+  // on continuation pages so item rows keep most of the vertical space.
+  function drawPageHeader(isFirstPage) {
+    let y = marginTop;
+    if (isFirstPage) {
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(13);
+      doc.text(CONFIG.shopName, marginX, y + 4);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.text(CONFIG.shopAddress, marginX, y + 8.5);
+      doc.text(`Phone: +${CONFIG.whatsappNumber.slice(0, 2)} ${CONFIG.whatsappNumber.slice(2)}`, marginX, y + 12.5);
 
-    if (y > 268) {
-      doc.addPage();
-      y = 22;
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(12);
+      doc.text("ORDER REQUEST", pageWidth - marginX, y + 6, { align: "right" });
+
+      y += 17;
+    } else {
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.text(CONFIG.shopName, marginX, y + 3);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.text(`Order No: ${orderNo} (contd.)`, pageWidth - marginX, y + 3, { align: "right" });
+      y += 6;
+    }
+    doc.setDrawColor(180);
+    doc.setLineWidth(0.2);
+    doc.line(marginX, y, pageWidth - marginX, y);
+    return y + 4;
+  }
+
+  // ---- Compact customer/order info block (page 1 only, ~19mm) ----
+  function drawCustomerInfo(y) {
+    const boxH = 19;
+    const halfW = contentWidth / 2;
+    doc.setDrawColor(180);
+    doc.setLineWidth(0.2);
+    doc.rect(marginX, y, contentWidth, boxH);
+    doc.line(marginX + halfW, y, marginX + halfW, y + boxH);
+    const headRowH = 5.5;
+    doc.line(marginX, y + headRowH, marginX + contentWidth, y + headRowH);
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8.5);
+    doc.text("Customer Information", marginX + 2, y + 3.9);
+    doc.text("Order Information", marginX + halfW + 2, y + 3.9);
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8.3);
+    let ly = y + headRowH + 4.2;
+    doc.text(`Customer: ${customerName || "—"}`, marginX + 2, ly);
+    doc.text(`Bill/Order No.: ${orderNo}`, marginX + halfW + 2, ly);
+    ly += 4.2;
+    doc.text(`Contact: ${customerPhone || "—"}`, marginX + 2, ly);
+    doc.text(`Date: ${now.toLocaleDateString("en-IN")}`, marginX + halfW + 2, ly);
+    ly += 4.2;
+    doc.text(`Time: ${now.toLocaleTimeString("en-IN")}`, marginX + halfW + 2, ly);
+
+    return y + boxH + 4;
+  }
+
+  // ---- Product table header row (repeated on every page) ----
+  function drawTableHeader(y) {
+    doc.setFillColor(235, 235, 235);
+    doc.rect(marginX, y, contentWidth, headerRowHeight, "F");
+    doc.setDrawColor(150);
+    doc.setLineWidth(0.2);
+    doc.rect(marginX, y, contentWidth, headerRowHeight);
+    colBoundaries.forEach((x) => doc.line(x, y, x, y + headerRowHeight));
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    const textY = y + headerRowHeight / 2 + 1.2;
+    doc.text("S.No.", colX.sno + colW.sno - 1.5, textY, { align: "right" });
+    doc.text("Product Description", colX.desc + 1.5, textY);
+    doc.text("Brand", colX.brand + 1.5, textY);
+    doc.text("Qty", colX.qty + colW.qty / 2, textY, { align: "center" });
+    doc.text("Unit Price", colX.price + colW.price - 1.5, textY, { align: "right" });
+    doc.text("Subtotal", colX.subtotal + colW.subtotal - 1.5, textY, { align: "right" });
+    return y + headerRowHeight;
+  }
+
+  // ---- Fit a (possibly long) product name into the description column ----
+  // Tries one line at the normal size, then a smaller size, then finally
+  // allows up to 2 lines with an ellipsis rather than overflowing the row
+  // or bleeding into the next column.
+  function fitDescription(text, maxWidth) {
+    let fontSize = 8.3;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(fontSize);
+    let lines = doc.splitTextToSize(text, maxWidth);
+    if (lines.length <= 1) return { lines, fontSize };
+
+    fontSize = 7.3;
+    doc.setFontSize(fontSize);
+    lines = doc.splitTextToSize(text, maxWidth);
+    if (lines.length <= 1) return { lines, fontSize };
+
+    if (lines.length > 2) {
+      lines = lines.slice(0, 2);
+      let last = lines[1];
+      while (last.length > 1 && doc.getTextWidth(last + "…") > maxWidth) {
+        last = last.slice(0, -1);
+      }
+      lines[1] = last + "…";
+    }
+    return { lines, fontSize };
+  }
+
+  // ---- Draw one compact item row; returns the row's actual height used ----
+  function drawItemRow(y, item, sno) {
+    const { lines: descLines, fontSize: descFontSize } = fitDescription(item.name, colW.desc - 3);
+    const lineStepMm = descFontSize * 0.42;
+    const rowH = descLines.length > 1 ? Math.max(rowHeight, descLines.length * lineStepMm + 2.5) : rowHeight;
+
+    doc.setDrawColor(200);
+    doc.setLineWidth(0.15);
+    colBoundaries.forEach((x) => doc.line(x, y, x, y + rowH));
+    doc.line(marginX, y + rowH, marginX + contentWidth, y + rowH);
+
+    const midY = y + rowH / 2 + 1.2;
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8.3);
+    doc.text(String(sno), colX.sno + colW.sno - 1.5, midY, { align: "right" });
+
+    doc.setFontSize(descFontSize);
+    if (descLines.length > 1) {
+      const blockH = descLines.length * lineStepMm;
+      let startY = y + rowH / 2 - blockH / 2 + lineStepMm * 0.75;
+      descLines.forEach((line, i) => doc.text(line, colX.desc + 1.5, startY + i * lineStepMm));
+    } else {
+      doc.text(descLines[0], colX.desc + 1.5, midY);
     }
 
-    const nameLines = doc.splitTextToSize(p.name, 68);
-    doc.text(nameLines, col.name, y);
-    doc.text(p.brand, col.brand, y);
-    doc.text(String(qty), col.qty, y);
-    doc.text(p.unit, col.unit, y);
-    doc.text(p.price === null ? "—" : formatPrice(p.price), col.price, y);
-    doc.text(lineTotal === null ? "Quote needed" : formatPrice(lineTotal), col.subtotal, y, { align: "right" });
+    doc.setFontSize(8.3);
+    doc.text(item.brand, colX.brand + 1.5, midY);
+    doc.text(String(item.qty), colX.qty + colW.qty / 2, midY, { align: "center" });
+    doc.text(item.price === null ? "—" : formatPrice(item.price), colX.price + colW.price - 1.5, midY, { align: "right" });
+    doc.text(item.lineTotal === null ? "Quote" : formatPrice(item.lineTotal), colX.subtotal + colW.subtotal - 1.5, midY, {
+      align: "right",
+    });
 
-    y += Math.max(6, nameLines.length * 5) + 2;
+    return rowH;
+  }
+
+  // ---- Lay out page 1: header, customer info, table header, then rows ----
+  let y = drawPageHeader(true);
+  y = drawCustomerInfo(y);
+  y = drawTableHeader(y);
+
+  items.forEach((item, idx) => {
+    const projectedHeight = rowHeight; // conservative estimate for the page-break check
+    if (y + projectedHeight > maxItemY) {
+      doc.addPage();
+      y = drawPageHeader(false);
+      y = drawTableHeader(y);
+    }
+    y += drawItemRow(y, item, idx + 1);
   });
 
-  y += 3;
-  doc.line(marginX, y, pageWidth - marginX, y);
-  y += 9;
+  // ---- Reserve space for totals / words / disclaimer / signatures ----
+  // Kept intentionally tight (~28mm) so that an order with exactly 32 short
+  // item rows still has a realistic chance of finishing on page 1, per the
+  // "single A4 page for 32 items" preference — while the ≥32-rows-per-page
+  // requirement above is met unconditionally regardless of this block.
+  const totalsBlockHeight = 5;
+  const wordsBlockHeight = total > 0 ? 5 : 0;
+  const disclaimerHeight = 7;
+  const signatureHeight = 6;
+  const bottomBlockHeight = totalsBlockHeight + wordsBlockHeight + disclaimerHeight + signatureHeight;
 
-  // ---- Total + amount in words ----
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(12);
-  doc.text(`Estimated Total: ${formatPrice(total)}${hasUnpriced ? " + items needing a quote" : ""}`, marginX, y);
-  y += 8;
-
-  if (total > 0) {
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
-    doc.text("Amount In Words:", marginX, y);
-    y += 5;
-    const wordsLines = doc.splitTextToSize(amountInWords(total), pageWidth - marginX * 2);
-    doc.text(wordsLines, marginX, y);
-    y += wordsLines.length * 5 + 6;
+  if (y + bottomBlockHeight > maxItemY) {
+    doc.addPage();
+    y = drawPageHeader(false);
+    y += 4;
+  } else {
+    y += 4;
   }
 
-  // ---- Note ----
+  // ---- Totals (single compact bold line — no separate subtotal, since this
+  // order form has no tax/discount split beyond the line-item sum) ----
+  const halfW = contentWidth / 2;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10.5);
+  doc.text("Estimated Total", marginX + halfW, y, { align: "right" });
+  doc.text(`${formatPrice(total)}${hasUnpriced ? " + quote" : ""}`, marginX + contentWidth, y, { align: "right" });
+  y += 6;
+
+  // ---- Amount in words (compact, wraps only if genuinely needed) ----
+  if (total > 0) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8);
+    doc.text("Amount in Words:", marginX, y);
+    doc.setFont("helvetica", "normal");
+    const labelWidth = doc.getTextWidth("Amount in Words: ") + 1.5;
+    const wordsLines = doc.splitTextToSize(amountInWords(total), contentWidth - labelWidth);
+    doc.text(wordsLines[0], marginX + labelWidth, y);
+    y += 4.2;
+    if (wordsLines.length > 1) {
+      doc.text(wordsLines.slice(1), marginX, y);
+      y += (wordsLines.length - 1) * 4.2;
+    }
+    y += 1.8;
+  }
+
+  // ---- Disclaimer (small italic notice, no boxed area) ----
   doc.setFont("helvetica", "italic");
-  doc.setFontSize(9);
+  doc.setFontSize(7);
   const note = doc.splitTextToSize(
     "This is a customer-generated order request, not a confirmed invoice. Prices and stock are subject to the shop's confirmation.",
-    pageWidth - marginX * 2
+    contentWidth
   );
   doc.text(note, marginX, y);
-  y += note.length * 5 + 16;
+  y += note.length * 3.3 + 3;
 
-  // ---- Signature line ----
-  if (y > 275) {
-    doc.addPage();
-    y = 22;
-  }
+  // ---- Signatures (compact two-column, minimal signing gap) ----
+  const rightColX = marginX + halfW;
+  y += 4;
+  doc.setDrawColor(180);
+  doc.setLineWidth(0.2);
+  doc.line(marginX, y, marginX + 60, y);
+  doc.line(rightColX, y, rightColX + 60, y);
+  y += 3.3;
   doc.setFont("helvetica", "normal");
-  doc.setFontSize(10);
-  doc.text(`For ${CONFIG.shopName}:`, marginX, y);
-  doc.text("Customer Signature:", rightColX, y);
-  y += 14;
+  doc.setFontSize(8);
   doc.text("Authorized Signatory", marginX, y);
-  doc.text(customerName || "—", rightColX, y);
+  doc.text("Customer Signature", rightColX, y);
 
-  return { doc, orderNo, total, hasUnpriced };
+  // ---- Footer with page numbers on every page ----
+  const totalPages = doc.internal.getNumberOfPages();
+  for (let p = 1; p <= totalPages; p++) {
+    doc.setPage(p);
+    doc.setDrawColor(200);
+    doc.setLineWidth(0.15);
+    doc.line(marginX, pageHeight - marginBottom - 3, marginX + contentWidth, pageHeight - marginBottom - 3);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.5);
+    doc.text(`${CONFIG.shopName} | ${CONFIG.shopAddress}`, marginX, pageHeight - marginBottom);
+    doc.text(`Page ${p} of ${totalPages}`, pageWidth - marginX, pageHeight - marginBottom, { align: "right" });
+  }
+
+  const filename = buildOrderFilename(customerName, orderNo, now);
+  return { doc, orderNo, total, hasUnpriced, filename };
 }
 
 // Primary checkout action: tries to hand the PDF straight to WhatsApp via the
@@ -543,8 +715,7 @@ async function shareOrderPDF() {
 
   const built = await buildOrderPDF(name, phone);
   if (!built) return;
-  const { doc, orderNo, total, hasUnpriced } = built;
-  const filename = `${orderNo}.pdf`;
+  const { doc, orderNo, total, hasUnpriced, filename } = built;
   const blob = doc.output("blob");
 
   await saveOrderToFirestore(orderNo, name, phone, total, hasUnpriced);
@@ -591,7 +762,7 @@ async function downloadOrderPDF() {
   const built = await buildOrderPDF(name, phone);
   if (!built) return;
   await saveOrderToFirestore(built.orderNo, name, phone, built.total, built.hasUnpriced);
-  built.doc.save(`${built.orderNo}.pdf`);
+  built.doc.save(built.filename);
 }
 
 function contactShop(topic) {
