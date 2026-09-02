@@ -508,18 +508,31 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // ---- Import starter catalog (one-time) ----
+  // ---- Import starter catalog (one-time, chunked for large catalogs) ----
   document.getElementById("import-starter-btn").addEventListener("click", async () => {
-    if (!confirm(`Import ${STARTER_PRODUCTS.length} starter products into your database?`)) return;
+    if (!confirm(`Import ${STARTER_PRODUCTS.length} starter products into your database? This may take a minute for a large catalog.`)) return;
+
+    const btn = document.getElementById("import-starter-btn");
+    const originalText = btn.textContent;
+    const CHUNK_SIZE = 450; // stay safely under Firestore's 500-operation batch limit
+
     try {
-      const batch = db.batch();
-      STARTER_PRODUCTS.forEach((p) => {
-        const ref = db.collection("products").doc(p.id);
-        batch.set(ref, { ...p, image: p.image || "" }, { merge: true });
-      });
-      await batch.commit();
+      let imported = 0;
+      for (let i = 0; i < STARTER_PRODUCTS.length; i += CHUNK_SIZE) {
+        const chunk = STARTER_PRODUCTS.slice(i, i + CHUNK_SIZE);
+        const batch = db.batch();
+        chunk.forEach((p) => {
+          const ref = db.collection("products").doc(p.id);
+          batch.set(ref, { ...p, image: p.image || "" }, { merge: true });
+        });
+        await batch.commit();
+        imported += chunk.length;
+        btn.textContent = `Importing… ${imported}/${STARTER_PRODUCTS.length}`;
+      }
+      btn.textContent = originalText;
       loadProducts();
     } catch (err) {
+      btn.textContent = originalText;
       alert("Import failed: " + err.message);
     }
   });
