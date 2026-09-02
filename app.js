@@ -46,6 +46,16 @@ function formatPrice(price) {
   return "₹" + price.toLocaleString("en-IN");
 }
 
+// PDF-only price formatter. jsPDF's built-in "helvetica" font only supports
+// the standard WinAnsi character set, which does not include the ₹ (Rupee)
+// glyph — using formatPrice()'s ₹ inside the PDF renders as a stray garbled
+// character instead of the symbol. "Rs." is plain ASCII and always renders
+// correctly without needing to embed a custom Unicode font.
+function formatPriceForPDF(price) {
+  if (price === null || price === undefined) return "Contact for price";
+  return "Rs. " + price.toLocaleString("en-IN");
+}
+
 function findProduct(id) {
   return PRODUCTS.find((p) => p.id === id);
 }
@@ -304,7 +314,7 @@ async function generateOrderNumber() {
   try {
     const nextNumber = await db.runTransaction(async (t) => {
       const snap = await t.get(counterRef);
-      const current = snap.exists ? snap.data().value : 3000;
+      const current = snap.exists ? snap.data().value : 3006;
       const next = current + 1;
       t.set(counterRef, { value: next }, { merge: true });
       return next;
@@ -458,13 +468,24 @@ async function buildOrderPDF(customerName, customerPhone) {
   function drawPageHeader(isFirstPage) {
     let y = marginTop;
     if (isFirstPage) {
+      const logoSize = 16; // mm, compact square — fits inside the ~17mm header block
+      let textX = marginX;
+      if (typeof LOGO_BASE64 !== "undefined" && LOGO_BASE64) {
+        try {
+          doc.addImage(LOGO_BASE64, "PNG", marginX, y, logoSize, logoSize);
+          textX = marginX + logoSize + 4;
+        } catch (err) {
+          console.error("Could not add logo to PDF:", err);
+        }
+      }
+
       doc.setFont("helvetica", "bold");
       doc.setFontSize(13);
-      doc.text(CONFIG.shopName, marginX, y + 4);
+      doc.text(CONFIG.shopName, textX, y + 4);
       doc.setFont("helvetica", "normal");
       doc.setFontSize(8);
-      doc.text(CONFIG.shopAddress, marginX, y + 8.5);
-      doc.text(`Phone: +${CONFIG.whatsappNumber.slice(0, 2)} ${CONFIG.whatsappNumber.slice(2)}`, marginX, y + 12.5);
+      doc.text(CONFIG.shopAddress, textX, y + 8.5);
+      doc.text(`Phone: +${CONFIG.whatsappNumber.slice(0, 2)} ${CONFIG.whatsappNumber.slice(2)}`, textX, y + 12.5);
 
       doc.setFont("helvetica", "bold");
       doc.setFontSize(12);
@@ -593,8 +614,8 @@ async function buildOrderPDF(customerName, customerPhone) {
     doc.setFontSize(8.3);
     doc.text(item.brand, colX.brand + 1.5, midY);
     doc.text(String(item.qty), colX.qty + colW.qty / 2, midY, { align: "center" });
-    doc.text(item.price === null ? "—" : formatPrice(item.price), colX.price + colW.price - 1.5, midY, { align: "right" });
-    doc.text(item.lineTotal === null ? "Quote" : formatPrice(item.lineTotal), colX.subtotal + colW.subtotal - 1.5, midY, {
+    doc.text(item.price === null ? "—" : formatPriceForPDF(item.price), colX.price + colW.price - 1.5, midY, { align: "right" });
+    doc.text(item.lineTotal === null ? "Quote" : formatPriceForPDF(item.lineTotal), colX.subtotal + colW.subtotal - 1.5, midY, {
       align: "right",
     });
 
@@ -635,13 +656,13 @@ async function buildOrderPDF(customerName, customerPhone) {
     y += 4;
   }
 
-  // ---- Totals (single compact bold line — no separate subtotal, since this
-  // order form has no tax/discount split beyond the line-item sum) ----
+  // ---- Totals (single combined text block — label and amount together,
+  // not split into two separately-aligned pieces) ----
   const halfW = contentWidth / 2;
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(10.5);
-  doc.text("Estimated Total", marginX + halfW, y, { align: "right" });
-  doc.text(`${formatPrice(total)}${hasUnpriced ? " + quote" : ""}`, marginX + contentWidth, y, { align: "right" });
+  doc.setFontSize(11);
+  const totalText = `Estimated Total: ${formatPriceForPDF(total)}${hasUnpriced ? " + quote" : ""}`;
+  doc.text(totalText, marginX + contentWidth, y, { align: "right" });
   y += 6;
 
   // ---- Amount in words (compact, wraps only if genuinely needed) ----
