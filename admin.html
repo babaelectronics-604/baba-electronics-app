@@ -66,19 +66,21 @@
         <table class="admin-table">
           <thead>
             <tr>
-              <th>Order No</th>
-              <th>Date</th>
+              <th>Order ID</th>
+              <th>Shop Name</th>
               <th>Customer</th>
-              <th>Items</th>
+              <th>Date/Time</th>
               <th>Total</th>
-              <th>Status</th>
-              <th></th>
+              <th>Payment</th>
+              <th>Order Status</th>
+              <th>Balance</th>
               <th></th>
             </tr>
           </thead>
           <tbody id="orders-tbody"></tbody>
         </table>
       </div>
+      <p class="page-sub" style="margin-top:8px;">Click any order row to view full details, edit items and payments, or generate its receipt.</p>
       <p class="state-message" id="orders-empty" hidden>No orders yet.</p>
     </div>
 
@@ -227,11 +229,19 @@
   <div class="detail-body" id="customer-panel-body"></div>
 </div>
 
+<!-- ============ ORDER DETAIL / EDIT DRAWER ============ -->
+<div class="overlay-scrim" id="order-overlay" hidden></div>
+<div class="detail-panel customer-panel" id="order-panel" role="dialog" aria-label="Order details" hidden>
+  <button class="detail-close" id="order-panel-close" aria-label="Close">✕</button>
+  <div class="detail-body" id="order-panel-body"></div>
+</div>
+
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="firebase-config.js"></script>
 <script src="config.js"></script>
+<script src="order-calc.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="taxonomy.js"></script>
 <script src="products.js"></script>
@@ -268,23 +278,30 @@ function renderOrdersTable(orders) {
   orders.forEach((order) => {
     const date = order.createdAt && order.createdAt.toDate ? order.createdAt.toDate() : null;
     const dateStr = date ? date.toLocaleDateString("en-IN") + " " + date.toLocaleTimeString("en-IN") : "—";
-    const itemsStr = (order.items || []).map((it) => `${it.name} × ${it.qty}`).join(", ");
+    const balanceRemaining = getBalanceRemainingOf(order);
+    const paymentStatus = getPaymentStatusOf(order);
 
     const tr = document.createElement("tr");
+    tr.className = "order-row-clickable";
+    tr.dataset.orderNo = order.orderNo;
     tr.innerHTML = `
       <td><strong>${order.orderNo}</strong></td>
-      <td>${dateStr}</td>
+      <td>${getShopNameOf(order) || "—"}</td>
       <td>${order.customerName || "—"}<br><span style="color:#8a9998;">${order.customerPhone || ""}</span></td>
-      <td>${itemsStr}</td>
-      <td>${formatPrice(order.total)}${order.hasUnpriced ? " +" : ""}</td>
+      <td>${dateStr}</td>
+      <td>${formatPrice(getOrderTotalOf(order))}${order.hasUnpriced ? " +" : ""}</td>
+      <td><span class="pay-badge ${paymentStatus === "paid" ? "pay-badge-paid" : paymentStatus === "partial" ? "pay-badge-advance" : "pay-badge-due"}">${paymentStatusLabel(paymentStatus)}</span></td>
       <td>
-        <select data-id="${order.orderNo}" class="status-select">
-          ${STATUSES.map((s) => `<option value="${s}" ${s === order.status ? "selected" : ""}>${s.charAt(0).toUpperCase() + s.slice(1)}</option>`).join("")}
+        <select data-id="${order.orderNo}" class="status-select" data-no-row-open>
+          ${STATUSES.map((s) => `<option value="${s}" ${s === order.status ? "selected" : ""}>${orderStatusLabel(s)}</option>`).join("")}
         </select>
       </td>
-      <td><button class="text-link" data-action="pdf" data-id="${order.orderNo}">PDF</button></td>
-      <td><button class="admin-delete" data-id="${order.orderNo}">Delete</button></td>
+      <td>${balanceRemaining < 0 ? "Advance " : ""}${formatPrice(Math.abs(balanceRemaining))}</td>
+      <td>
+        <button class="admin-delete" data-id="${order.orderNo}" data-no-row-open>Delete</button>
+      </td>
     `;
+    tr.style.cursor = "pointer";
     tbody.appendChild(tr);
   });
 }
@@ -570,8 +587,9 @@ async function refreshCustomerData() {
   if (activeCustomerPhone) renderCustomerPanel(activeCustomerPhone);
 }
 
-// Regenerates a stored order's PDF (same layout as the one the customer
-// got) from the data saved in the database, and downloads it.
+// Regenerates a stored order's ORDER REQUEST PDF (the original checkout
+// document — unchanged even after admin edits) from the data saved in the
+// database, and downloads it.
 function downloadOrderPdfFromAdmin(orderNo) {
   const order = ordersCache.find((o) => o.orderNo === orderNo);
   if (!order) {
@@ -589,16 +607,394 @@ function downloadOrderPdfFromAdmin(orderNo) {
 
   const result = renderOrderPDF({
     orderNo: order.orderNo,
+    shopName: getShopNameOf(order),
     customerName: order.customerName,
     customerPhone: order.customerPhone,
+    customerAddress: getCustomerAddressOf(order),
     items,
-    total: order.total,
+    total: getOrderTotalOf(order),
     hasUnpriced: order.hasUnpriced,
     date,
   });
   if (result) {
     result.doc.save(result.filename);
   }
+}
+
+// Generates/regenerates the PAYMENT RECEIPT PDF from an order's latest
+// SAVED data (never from unsaved drawer edits — callers save first).
+function downloadPaymentReceiptFor(orderNo) {
+  const order = ordersCache.find((o) => o.orderNo === orderNo);
+  if (!order) {
+    alert("Couldn't find that order's data.");
+    return;
+  }
+  const items = (order.items || []).map((it) => ({
+    name: it.name,
+    qty: it.qty,
+    price: it.price,
+    lineTotal: it.lineTotal !== undefined && it.lineTotal !== null ? it.lineTotal : (it.price === null || it.price === undefined ? null : it.price * it.qty),
+  }));
+  const date = order.createdAt && order.createdAt.toDate ? order.createdAt.toDate() : new Date();
+
+  const result = renderPaymentReceiptPDF({
+    orderNo: order.orderNo,
+    shopName: getShopNameOf(order),
+    customerName: order.customerName,
+    customerPhone: order.customerPhone,
+    customerAddress: getCustomerAddressOf(order),
+    items,
+    previousBalance: getPreviousBalanceOf(order),
+    currentOrderTotal: getCurrentOrderTotalOf(order),
+    total: getOrderTotalOf(order),
+    paymentReceived: getPaymentReceivedOf(order),
+    balanceRemaining: getBalanceRemainingOf(order),
+    paymentStatus: getPaymentStatusOf(order),
+    date,
+  });
+  if (result) {
+    result.doc.save(result.filename);
+  }
+}
+
+/* ============================================================
+   ORDER DETAIL / EDIT DRAWER
+   ============================================================
+   Holds a local *editable copy* of one order while the drawer is
+   open (`editingOrder`). Nothing is written to Firestore until
+   "Save changes" is clicked — every input on the way there just
+   mutates this local copy and re-renders the live totals, so the
+   admin sees Current Order Total / Total / Balance Remaining /
+   Payment Status update in real time before committing anything.
+   ============================================================ */
+let editingOrder = null; // local editable copy of the order currently open
+let editingOrderNo = null;
+
+function openOrderDrawer(orderNo) {
+  const order = ordersCache.find((o) => o.orderNo === orderNo);
+  if (!order) return;
+  // Deep-ish clone: items array copied so edits don't mutate ordersCache
+  // until saved (Cancel just discards this copy).
+  editingOrder = {
+    ...order,
+    shopName: getShopNameOf(order),
+    customerAddress: getCustomerAddressOf(order),
+    previousBalance: getPreviousBalanceOf(order),
+    paymentReceived: getPaymentReceivedOf(order),
+    discount: getDiscountOf(order),
+    items: (order.items || []).map((it) => ({ ...it })),
+    status: order.status || "pending",
+  };
+  editingOrderNo = orderNo;
+
+  renderOrderDrawer();
+
+  const panel = document.getElementById("order-panel");
+  const overlay = document.getElementById("order-overlay");
+  panel.hidden = false;
+  overlay.hidden = false;
+  void panel.offsetWidth;
+  panel.classList.add("is-open");
+  overlay.classList.add("is-visible");
+  document.body.classList.add("modal-open");
+}
+
+function closeOrderDrawer() {
+  const panel = document.getElementById("order-panel");
+  const overlay = document.getElementById("order-overlay");
+  panel.classList.remove("is-open");
+  overlay.classList.remove("is-visible");
+  document.body.classList.remove("modal-open");
+  setTimeout(() => {
+    panel.hidden = true;
+    overlay.hidden = true;
+  }, 200);
+  editingOrder = null;
+  editingOrderNo = null;
+}
+
+// Recomputes financials from the current editable state and updates just
+// the live summary numbers in the DOM (no full re-render, so the item
+// inputs the admin is actively typing into don't lose focus).
+function refreshOrderDrawerTotals() {
+  if (!editingOrder) return;
+  const fin = computeOrderFinancials({
+    items: editingOrder.items,
+    previousBalance: editingOrder.previousBalance,
+    paymentReceived: editingOrder.paymentReceived,
+    discount: editingOrder.discount,
+  });
+  editingOrder._financials = fin;
+
+  editingOrder.items.forEach((it, i) => {
+    const lineTotal = it.price === null || it.price === undefined ? null : roundMoney(it.price * (Number(it.qty) || 0));
+    it.lineTotal = lineTotal;
+    const cell = document.querySelector(`#order-items-tbody tr[data-idx="${i}"] .line-total-cell`);
+    if (cell) cell.textContent = lineTotal === null ? "Quote" : formatPrice(lineTotal);
+  });
+
+  const setText = (id, text) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+  };
+  setText("od-current-total", formatPrice(fin.currentOrderTotal));
+  setText("od-grand-total", formatPrice(fin.total));
+  setText(
+    "od-balance-remaining",
+    (fin.balanceRemaining < 0 ? "Advance " : "") + formatPrice(Math.abs(fin.balanceRemaining))
+  );
+  const statusEl = document.getElementById("od-payment-status");
+  if (statusEl) {
+    statusEl.textContent = paymentStatusLabel(fin.paymentStatus);
+    statusEl.className =
+      "pay-badge " + (fin.paymentStatus === "paid" ? "pay-badge-paid" : fin.paymentStatus === "partial" ? "pay-badge-advance" : "pay-badge-due");
+  }
+}
+
+function renderOrderDrawer() {
+  const order = editingOrder;
+  const body = document.getElementById("order-panel-body");
+  if (!order) {
+    body.innerHTML = `<p class="state-message">Order not found.</p>`;
+    return;
+  }
+
+  const date = order.createdAt && order.createdAt.toDate ? order.createdAt.toDate() : null;
+  const dateStr = date ? date.toLocaleDateString("en-IN") + " · " + date.toLocaleTimeString("en-IN") : "—";
+
+  const fin = computeOrderFinancials({
+    items: order.items,
+    previousBalance: order.previousBalance,
+    paymentReceived: order.paymentReceived,
+    discount: order.discount,
+  });
+  order._financials = fin;
+
+  const itemsRowsHtml = order.items
+    .map((it, i) => {
+      const lineTotal = it.price === null || it.price === undefined ? null : roundMoney(it.price * (Number(it.qty) || 0));
+      it.lineTotal = lineTotal;
+      return `
+      <tr data-idx="${i}">
+        <td>${it.name}${it.sku ? `<br><span style="color:#8a9998;font-size:11px;">SKU: ${it.sku}</span>` : ""}</td>
+        <td><input type="number" min="1" step="1" value="${it.qty}" data-field="qty" data-idx="${i}" /></td>
+        <td><input type="number" min="0" step="0.01" value="${it.price === null ? "" : it.price}" placeholder="Quote" data-field="price" data-idx="${i}" /></td>
+        <td class="line-total-cell">${lineTotal === null ? "Quote" : formatPrice(lineTotal)}</td>
+        <td><button type="button" class="admin-delete" data-action="remove-item" data-idx="${i}">✕</button></td>
+      </tr>`;
+    })
+    .join("");
+
+  const productOptionsHtml = (productsCache || [])
+    .map((p) => `<option value="${p.id}">${p.name} — ${formatPrice(p.price)}</option>`)
+    .join("");
+
+  const auditHtml =
+    order.auditLog && order.auditLog.length
+      ? order.auditLog
+          .slice()
+          .reverse()
+          .slice(0, 20)
+          .map(
+            (a) =>
+              `<div>${new Date(a.timestamp).toLocaleString("en-IN")} — <strong>${a.field}</strong> changed from "${a.oldValue}" to "${a.newValue}" by ${a.editedBy}</div>`
+          )
+          .join("")
+      : `<p class="state-message" style="padding:6px 0;">No edits recorded yet.</p>`;
+
+  body.innerHTML = `
+    <h2 class="form-title" style="margin-top:8px;">Order ${order.orderNo}</h2>
+    <p class="page-sub" style="margin-top:-8px;">Placed ${dateStr}</p>
+
+    <div class="order-section">
+      <h3 class="order-section-title">Customer / Shop Information</h3>
+      <div class="order-field-grid">
+        <div class="order-field">
+          <label for="od-shop-name">Shop Name</label>
+          <input type="text" id="od-shop-name" value="${order.shopName || ""}" />
+        </div>
+        <div class="order-field">
+          <label>Customer Name</label>
+          <div class="field-readonly">${order.customerName || "—"}</div>
+        </div>
+        <div class="order-field">
+          <label>Customer Phone</label>
+          <div class="field-readonly">${order.customerPhone || "—"}</div>
+        </div>
+        <div class="order-field">
+          <label>Customer Address</label>
+          <div class="field-readonly">${order.customerAddress || "—"}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="order-section">
+      <h3 class="order-section-title">Order Information</h3>
+      <div class="order-field-grid">
+        <div class="order-field">
+          <label>Order ID</label>
+          <div class="field-readonly">${order.orderNo}</div>
+        </div>
+        <div class="order-field">
+          <label>Order Date &amp; Time</label>
+          <div class="field-readonly">${dateStr}</div>
+        </div>
+        <div class="order-field">
+          <label for="od-order-status">Order Status</label>
+          <select id="od-order-status">
+            ${STATUSES.map((s) => `<option value="${s}" ${s === order.status ? "selected" : ""}>${orderStatusLabel(s)}</option>`).join("")}
+          </select>
+        </div>
+        <div class="order-field">
+          <label>Payment Status (auto)</label>
+          <div><span id="od-payment-status" class="pay-badge ${fin.paymentStatus === "paid" ? "pay-badge-paid" : fin.paymentStatus === "partial" ? "pay-badge-advance" : "pay-badge-due"}">${paymentStatusLabel(fin.paymentStatus)}</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="order-section">
+      <h3 class="order-section-title">Ordered Products</h3>
+      <table class="order-items-table">
+        <thead><tr><th>Product</th><th>Qty</th><th>Unit Price (₹)</th><th>Line Total</th><th></th></tr></thead>
+        <tbody id="order-items-tbody">${itemsRowsHtml}</tbody>
+      </table>
+      <div class="order-add-product-row">
+        <select id="od-add-product-select">
+          <option value="">— Select a product to add —</option>
+          ${productOptionsHtml}
+        </select>
+        <button type="button" class="btn-secondary" id="od-add-product-btn" style="width:auto;margin-top:0;">+ Add product</button>
+      </div>
+    </div>
+
+    <div class="order-section">
+      <h3 class="order-section-title">Financials</h3>
+      <div class="order-field-grid">
+        <div class="order-field">
+          <label for="od-discount">Discount (₹, optional)</label>
+          <input type="number" id="od-discount" min="0" step="0.01" value="${order.discount || ""}" />
+        </div>
+        <div class="order-field">
+          <label for="od-previous-balance">Previous Balance (₹)</label>
+          <input type="number" id="od-previous-balance" min="0" step="0.01" value="${order.previousBalance || 0}" />
+        </div>
+        <div class="order-field">
+          <label for="od-payment-received">Payment Received (₹)</label>
+          <input type="number" id="od-payment-received" min="0" step="0.01" value="${order.paymentReceived || 0}" />
+        </div>
+      </div>
+
+      <div class="order-summary-box" style="margin-top:12px;">
+        <div class="order-summary-row"><span>Current Order Total</span><span id="od-current-total">${formatPrice(fin.currentOrderTotal)}</span></div>
+        <div class="order-summary-row is-total"><span>Total (Previous Balance + Current Order Total)</span><span id="od-grand-total">${formatPrice(fin.total)}</span></div>
+        <div class="order-summary-row"><span>Balance Remaining</span><span id="od-balance-remaining">${(fin.balanceRemaining < 0 ? "Advance " : "") + formatPrice(Math.abs(fin.balanceRemaining))}</span></div>
+      </div>
+    </div>
+
+    <div class="order-section">
+      <h3 class="order-section-title">Audit Log</h3>
+      <div class="audit-log-list">${auditHtml}</div>
+    </div>
+
+    <div class="order-drawer-actions">
+      <button type="button" class="btn-primary" id="od-save-btn">Save changes</button>
+      <button type="button" class="btn-secondary" id="od-cancel-btn">Cancel</button>
+      <button type="button" class="btn-secondary" id="od-receipt-btn">Save &amp; Generate Payment Receipt</button>
+      <button type="button" class="btn-secondary" id="od-request-pdf-btn">Download Order Request PDF</button>
+    </div>
+    <p class="state-message" id="od-save-status" hidden></p>
+  `;
+}
+
+// Persists the local editable copy to Firestore: recalculates financials
+// one more time (never trusting the last onscreen render), builds audit
+// entries for whatever changed, and — if Payment Received changed — writes
+// a customer-facing notification onto the order document.
+async function saveOrderEdits() {
+  if (!editingOrder || !editingOrderNo) return null;
+  const original = ordersCache.find((o) => o.orderNo === editingOrderNo);
+  if (!original) return null;
+
+  const fin = computeOrderFinancials({
+    items: editingOrder.items,
+    previousBalance: editingOrder.previousBalance,
+    paymentReceived: editingOrder.paymentReceived,
+    discount: editingOrder.discount,
+  });
+
+  const updatedData = {
+    shopName: editingOrder.shopName || "",
+    items: editingOrder.items.map((it) => ({
+      id: it.id || "",
+      name: it.name,
+      brand: it.brand || "",
+      sku: it.sku || "",
+      unit: it.unit || "",
+      price: it.price === null || it.price === undefined || it.price === "" ? null : Number(it.price),
+      qty: Number(it.qty) || 0,
+      lineTotal: it.price === null || it.price === undefined || it.price === "" ? null : roundMoney(Number(it.price) * (Number(it.qty) || 0)),
+    })),
+    discount: editingOrder.discount || 0,
+    previousBalance: editingOrder.previousBalance || 0,
+    paymentReceived: editingOrder.paymentReceived || 0,
+    currentOrderTotal: fin.currentOrderTotal,
+    total: fin.total,
+    balanceRemaining: fin.balanceRemaining,
+    paymentStatus: fin.paymentStatus,
+    hasUnpriced: fin.hasUnpriced,
+    status: editingOrder.status,
+  };
+
+  const fieldLabels = {
+    shopName: "Shop Name",
+    discount: "Discount",
+    previousBalance: "Previous Balance",
+    paymentReceived: "Payment Received",
+    status: "Order Status",
+    items: "Products / Quantities / Prices",
+  };
+  const beforeForDiff = {
+    shopName: getShopNameOf(original),
+    discount: getDiscountOf(original),
+    previousBalance: getPreviousBalanceOf(original),
+    paymentReceived: getPaymentReceivedOf(original),
+    status: original.status,
+    items: original.items,
+  };
+  const afterForDiff = {
+    shopName: updatedData.shopName,
+    discount: updatedData.discount,
+    previousBalance: updatedData.previousBalance,
+    paymentReceived: updatedData.paymentReceived,
+    status: updatedData.status,
+    items: updatedData.items,
+  };
+  const adminEmail = (auth.currentUser && auth.currentUser.email) || "admin";
+  const newAuditEntries = buildAuditEntries(beforeForDiff, afterForDiff, fieldLabels, adminEmail);
+
+  const paymentChanged = getPaymentReceivedOf(original) !== updatedData.paymentReceived;
+  let notification = original.notification || null;
+  if (paymentChanged) {
+    notification = {
+      message: `Payment updated successfully for Order #${editingOrderNo}. Payment Received: ${formatPrice(updatedData.paymentReceived)}. Balance Remaining: ${formatPrice(Math.abs(fin.balanceRemaining))}${fin.balanceRemaining < 0 ? " (advance)" : ""}.`,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  updatedData.auditLog = [...(original.auditLog || []), ...newAuditEntries];
+  updatedData.notification = notification;
+
+  await db.collection("orders").doc(editingOrderNo).update(updatedData);
+
+  // Reflect the save locally so the table + drawer show fresh data without
+  // waiting on a full reload, and so "latest saved data" is accurate for
+  // an immediately-following receipt generation.
+  const merged = { ...original, ...updatedData };
+  const idx = ordersCache.findIndex((o) => o.orderNo === editingOrderNo);
+  if (idx !== -1) ordersCache[idx] = merged;
+  renderOrdersTable(ordersCache);
+
+  return merged;
 }
 
 /* ============================================================
@@ -907,28 +1303,175 @@ document.addEventListener("DOMContentLoaded", () => {
     const select = e.target.closest(".status-select");
     if (!select) return;
     const orderNo = select.dataset.id;
+    if (select.value === "cancelled" && !confirm(`Mark order ${orderNo} as Cancelled?`)) {
+      const order = ordersCache.find((o) => o.orderNo === orderNo);
+      select.value = (order && order.status) || "pending";
+      return;
+    }
     try {
       await db.collection("orders").doc(orderNo).update({ status: select.value });
+      const order = ordersCache.find((o) => o.orderNo === orderNo);
+      if (order) order.status = select.value;
     } catch (err) {
       alert("Could not update status: " + err.message);
     }
   });
 
   document.getElementById("orders-tbody").addEventListener("click", async (e) => {
-    const pdfBtn = e.target.closest('[data-action="pdf"]');
-    if (pdfBtn) {
-      downloadOrderPdfFromAdmin(pdfBtn.dataset.id);
+    const btn = e.target.closest(".admin-delete");
+    if (btn) {
+      const orderNo = btn.dataset.id;
+      if (!confirm(`Delete order ${orderNo}? This can't be undone.`)) return;
+      try {
+        await db.collection("orders").doc(orderNo).delete();
+        loadOrders();
+      } catch (err) {
+        alert("Could not delete order: " + err.message);
+      }
       return;
     }
-    const btn = e.target.closest(".admin-delete");
-    if (!btn) return;
-    const orderNo = btn.dataset.id;
-    if (!confirm(`Delete order ${orderNo}? This can't be undone.`)) return;
-    try {
-      await db.collection("orders").doc(orderNo).delete();
-      loadOrders();
-    } catch (err) {
-      alert("Could not delete order: " + err.message);
+    // Any other click on the row (that isn't the status select or delete
+    // button, both marked data-no-row-open) opens the full detail drawer.
+    if (e.target.closest("[data-no-row-open]")) return;
+    const row = e.target.closest("tr[data-order-no]");
+    if (row) openOrderDrawer(row.dataset.orderNo);
+  });
+
+  // ---- Order detail drawer: close ----
+  document.getElementById("order-panel-close").addEventListener("click", closeOrderDrawer);
+  document.getElementById("order-overlay").addEventListener("click", closeOrderDrawer);
+
+  // ---- Order detail drawer: live edits (event delegation, since the body
+  // is re-rendered fresh each time the drawer opens) ----
+  document.getElementById("order-panel-body").addEventListener("input", (e) => {
+    if (!editingOrder) return;
+    const { id } = e.target;
+    if (id === "od-shop-name") {
+      editingOrder.shopName = e.target.value;
+      return;
+    }
+    if (id === "od-discount") {
+      editingOrder.discount = Number(e.target.value) || 0;
+      refreshOrderDrawerTotals();
+      return;
+    }
+    if (id === "od-previous-balance") {
+      editingOrder.previousBalance = Number(e.target.value) || 0;
+      refreshOrderDrawerTotals();
+      return;
+    }
+    if (id === "od-payment-received") {
+      editingOrder.paymentReceived = Number(e.target.value) || 0;
+      refreshOrderDrawerTotals();
+      return;
+    }
+    const field = e.target.dataset.field;
+    if (field === "qty" || field === "price") {
+      const idx = Number(e.target.dataset.idx);
+      const item = editingOrder.items[idx];
+      if (!item) return;
+      if (field === "qty") {
+        item.qty = Math.max(1, Number(e.target.value) || 1);
+      } else {
+        item.price = e.target.value === "" ? null : Math.max(0, Number(e.target.value));
+      }
+      refreshOrderDrawerTotals();
+    }
+  });
+
+  document.getElementById("order-panel-body").addEventListener("change", (e) => {
+    if (!editingOrder) return;
+    if (e.target.id === "od-order-status") {
+      if (e.target.value === "cancelled" && !confirm("Mark this order as Cancelled?")) {
+        e.target.value = editingOrder.status;
+        return;
+      }
+      editingOrder.status = e.target.value;
+    }
+  });
+
+  document.getElementById("order-panel-body").addEventListener("click", (e) => {
+    if (!editingOrder) return;
+
+    const removeBtn = e.target.closest('[data-action="remove-item"]');
+    if (removeBtn) {
+      if (editingOrder.items.length <= 1) {
+        alert("An order needs at least one product. Remove the whole order instead if needed.");
+        return;
+      }
+      if (!confirm("Remove this product from the order?")) return;
+      editingOrder.items.splice(Number(removeBtn.dataset.idx), 1);
+      renderOrderDrawer();
+      return;
+    }
+
+    if (e.target.id === "od-add-product-btn") {
+      const select = document.getElementById("od-add-product-select");
+      const productId = select.value;
+      if (!productId) return;
+      const p = (productsCache || []).find((pr) => pr.id === productId);
+      if (!p) return;
+      const existing = editingOrder.items.find((it) => it.id === p.id);
+      if (existing) {
+        existing.qty = (Number(existing.qty) || 0) + 1;
+      } else {
+        editingOrder.items.push({
+          id: p.id,
+          name: p.name,
+          brand: p.brand || "",
+          sku: p.sku || "",
+          unit: p.unit || "",
+          price: p.price,
+          qty: 1,
+        });
+      }
+      renderOrderDrawer();
+      return;
+    }
+
+    if (e.target.id === "od-cancel-btn") {
+      closeOrderDrawer();
+      return;
+    }
+
+    if (e.target.id === "od-request-pdf-btn") {
+      downloadOrderPdfFromAdmin(editingOrderNo);
+      return;
+    }
+
+    if (e.target.id === "od-save-btn") {
+      (async () => {
+        const statusEl = document.getElementById("od-save-status");
+        try {
+          await saveOrderEdits();
+          statusEl.className = "state-message";
+          statusEl.textContent = "Saved.";
+          statusEl.hidden = false;
+          openOrderDrawer(editingOrderNo); // re-render drawer from the freshly saved data
+        } catch (err) {
+          statusEl.textContent = "Could not save: " + err.message;
+          statusEl.hidden = false;
+        }
+      })();
+      return;
+    }
+
+    if (e.target.id === "od-receipt-btn") {
+      (async () => {
+        const statusEl = document.getElementById("od-save-status");
+        try {
+          await saveOrderEdits();
+          downloadPaymentReceiptFor(editingOrderNo);
+          statusEl.className = "state-message";
+          statusEl.textContent = "Saved and receipt generated.";
+          statusEl.hidden = false;
+          openOrderDrawer(editingOrderNo);
+        } catch (err) {
+          statusEl.textContent = "Could not save/generate receipt: " + err.message;
+          statusEl.hidden = false;
+        }
+      })();
+      return;
     }
   });
 

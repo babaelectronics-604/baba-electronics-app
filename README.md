@@ -15,9 +15,14 @@ WhatsApp, customer order history, and a password-protected admin panel.
 - `config.js` — shop name, address, and WhatsApp number — shared by the shop
   page, the admin panel, and PDF generation
 - `app.js` — the shop page's logic (search, cart, checkout, WhatsApp)
-- `pdf-builder.js` — the order-PDF layout, shared by the shop page (new
-  orders) and the admin panel (regenerating a past order's PDF), so both
-  always produce an identical-looking document
+- `pdf-builder.js` — the order-PDF and payment-receipt layouts, shared by
+  the shop page (new orders) and the admin panel (regenerating a past
+  order's PDF or generating its payment receipt), so all of them always
+  produce identical-looking documents
+- `order-calc.js` — the single shared calculation model for order totals,
+  balances, and payment status, used by the shop page, "My Orders", the
+  admin panel, and PDF generation, so a total is never computed two
+  different ways in two different places
 - `firebase-config.js` — your database connection details (see setup below)
 - `logo.png` / `logo-data.js` — your shop logo, shown on every page and
   printed on the order PDF (`logo-data.js` is just `logo.png` re-encoded
@@ -230,9 +235,9 @@ to build the integration once you have it.
 2. **Upload the files.** On the new repo's page, click **"uploading an
    existing file"** (or the **Add file → Upload files** button), then drag
    in every file from this folder: `index.html`, `orders.html`,
-   `admin.html`, `style.css`, `app.js`, `pdf-builder.js`, `config.js`,
-   `products.js`, `firebase-config.js`, `logo.png`, `logo-data.js`,
-   `README.md`. Commit the upload.
+   `admin.html`, `style.css`, `app.js`, `pdf-builder.js`, `order-calc.js`,
+   `config.js`, `products.js`, `firebase-config.js`, `logo.png`,
+   `logo-data.js`, `README.md`. Commit the upload.
 
 3. **Turn on Pages.** In the repo, go to **Settings → Pages** (left
    sidebar). Under "Build and deployment", set **Source** to
@@ -257,6 +262,63 @@ git remote add origin https://github.com/<your-username>/<repo-name>.git
 git push -u origin main
 ```
 Then do step 3 above.
+
+## Orders, Payments & Payment Receipts (admin panel)
+
+Checkout now also asks for the customer's **Shop Name** and **delivery
+address**, alongside their name and phone — all four are required and are
+stored with the order. `orderNo`/`createdAt` (Order Time) and the
+customer's Name/Phone/Address are permanent once an order is placed —
+nothing in the admin panel can edit them.
+
+Click any row in the **Orders** tab to open the full order drawer:
+
+- **Customer / Shop Information** — Shop Name is editable; Customer Name,
+  Phone and Address are shown read-only and can't be changed here.
+- **Ordered Products** — change quantities or prices, remove a line, or
+  add another product from the catalog. Every change recalculates the
+  **Current Order Total** live, before you save anything.
+- **Financials** — an optional **Discount**, the **Previous Balance**
+  carried over from earlier orders, and **Payment Received**. The engine
+  (shared by every screen, in `order-calc.js`) always computes:
+  ```
+  Current Order Total = sum(line totals) − Discount
+  Total                = Previous Balance + Current Order Total
+  Balance Remaining    = Total − Payment Received
+  ```
+  **Payment Status** (Payment Pending / Partially Paid / Fully Paid) is
+  never set by hand — it's always derived from Payment Received vs Total,
+  so it can't drift out of sync with the numbers.
+- **Order Status** (Order Placed / Processing / Completed / Cancelled) is
+  editable and separate from Payment Status.
+- **Audit Log** — every saved change (Shop Name, Discount, Previous
+  Balance, Payment Received, Order Status, or the product list) is
+  recorded with who changed it, the old/new value, and when. Order Time
+  is never part of this log, because it's never editable.
+- **Save changes** writes everything to the database. If Payment Received
+  changed, the order also gets a customer-facing notification message
+  ("Payment updated successfully for Order #…") that the customer sees
+  the next time they look up that order on **My Orders** — this app has
+  no push/SMS notifications, so "My Orders" is the existing mechanism
+  this plugs into.
+- **Save & Generate Payment Receipt** saves first, then builds a formal
+  **PAYMENT RECEIPT** PDF (shop branding, Shop Name, Customer details,
+  itemized products, Previous Balance, Current Order Total, Total,
+  Payment Received, Balance Remaining, Payment Status) from the
+  just-saved data. Customers can also download the latest receipt
+  themselves from **My Orders**, once an order has been processed at
+  least once.
+- **Download Order Request PDF** regenerates the original checkout
+  document (still headed "ORDER REQUEST") from the saved data — this one
+  never changes to a receipt on its own; only the dedicated receipt
+  button produces a "PAYMENT RECEIPT".
+
+**Existing orders placed before this update** don't have Shop Name,
+Previous Balance, Payment Received, etc. saved yet — every screen treats
+that the same way: Shop Name shows blank/editable, Previous Balance and
+Payment Received default to ₹0, and Payment Status defaults to Payment
+Pending, so nothing breaks and the admin can just fill these in from the
+order drawer the first time they touch an old order.
 
 ## Notes
 - Products without a photo show a simple colored placeholder tile with

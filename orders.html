@@ -42,15 +42,49 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="firebase-config.js"></script>
+<script src="config.js"></script>
+<script src="order-calc.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="logo-data.js"></script>
+<script src="pdf-builder.js"></script>
 <script>
 function statusLabel(s) {
-  return { pending: "Pending", confirmed: "Confirmed", fulfilled: "Fulfilled", cancelled: "Cancelled" }[s] || s;
+  return orderStatusLabel(s || "pending");
 }
 
 function formatPrice(price) {
   if (price === null || price === undefined) return "Contact for price";
   const hasCents = Math.round(price * 100) % 100 !== 0;
   return "₹" + price.toLocaleString("en-IN", { minimumFractionDigits: hasCents ? 2 : 0, maximumFractionDigits: 2 });
+}
+
+// Regenerates and downloads the Payment Receipt PDF from an order's latest
+// saved data — identical logic to the admin panel's regenerate button, so
+// the customer always gets the current, admin-modified figures.
+function downloadReceiptFor(order) {
+  const items = (order.items || []).map((it) => ({
+    name: it.name,
+    qty: it.qty,
+    price: it.price,
+    lineTotal: it.lineTotal !== undefined && it.lineTotal !== null ? it.lineTotal : (it.price === null || it.price === undefined ? null : it.price * it.qty),
+  }));
+  const date = order.createdAt && order.createdAt.toDate ? order.createdAt.toDate() : new Date();
+  const result = renderPaymentReceiptPDF({
+    orderNo: order.orderNo,
+    shopName: getShopNameOf(order),
+    customerName: order.customerName,
+    customerPhone: order.customerPhone,
+    customerAddress: getCustomerAddressOf(order),
+    items,
+    previousBalance: getPreviousBalanceOf(order),
+    currentOrderTotal: getCurrentOrderTotalOf(order),
+    total: getOrderTotalOf(order),
+    paymentReceived: getPaymentReceivedOf(order),
+    balanceRemaining: getBalanceRemainingOf(order),
+    paymentStatus: getPaymentStatusOf(order),
+    date,
+  });
+  if (result) result.doc.save(result.filename);
 }
 
 function renderOrders(orders) {
@@ -62,13 +96,23 @@ function renderOrders(orders) {
     return;
   }
 
-  orders.forEach((order) => {
+  orders.forEach((order, idx) => {
     const date = order.createdAt && order.createdAt.toDate ? order.createdAt.toDate() : null;
     const dateStr = date ? date.toLocaleDateString("en-IN") + " · " + date.toLocaleTimeString("en-IN") : "";
 
     const itemsStr = (order.items || [])
       .map((it) => `${it.name} × ${it.qty}`)
       .join(", ");
+
+    const balanceRemaining = getBalanceRemainingOf(order);
+    const paymentStatus = getPaymentStatusOf(order);
+    const paymentReceived = getPaymentReceivedOf(order);
+    const hasBeenProcessed = paymentReceived > 0 || (order.auditLog && order.auditLog.length > 0);
+
+    const notificationHtml =
+      order.notification && order.notification.message
+        ? `<div class="payment-notification">🔔 ${order.notification.message}</div>`
+        : "";
 
     const card = document.createElement("div");
     card.className = "order-card";
@@ -80,10 +124,17 @@ function renderOrders(orders) {
         </div>
         <span class="status-badge status-${order.status || "pending"}">${statusLabel(order.status || "pending")}</span>
       </div>
+      ${notificationHtml}
       <p class="order-items">${itemsStr}</p>
-      <p class="order-total">${formatPrice(order.total)}${order.hasUnpriced ? " + items needing a quote" : ""}</p>
+      <p class="order-total">${formatPrice(getOrderTotalOf(order))}${order.hasUnpriced ? " + items needing a quote" : ""}</p>
+      <p class="order-total" style="font-size:13px;color:#566b6a;">Payment: ${paymentStatusLabel(paymentStatus)} · Balance ${balanceRemaining < 0 ? "in advance" : "due"}: ${formatPrice(Math.abs(balanceRemaining))}</p>
+      ${hasBeenProcessed ? `<button class="text-link" data-action="receipt" data-idx="${idx}">Download Payment Receipt</button>` : ""}
     `;
     results.appendChild(card);
+  });
+
+  results.querySelectorAll('[data-action="receipt"]').forEach((btn) => {
+    btn.addEventListener("click", () => downloadReceiptFor(orders[Number(btn.dataset.idx)]));
   });
 }
 

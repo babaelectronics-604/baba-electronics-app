@@ -521,33 +521,70 @@ function getCustomerPhone() {
   return input ? input.value.trim() : "";
 }
 
-// Saves the order to Firestore for order history + the admin panel.
-// Silently skips if Firebase hasn't been configured yet (see firebase-config.js).
-async function saveOrderToFirestore(orderNo, customerName, customerPhone, total, hasUnpriced) {
+function getShopNameInput() {
+  const input = document.getElementById("customer-shop-name");
+  return input ? input.value.trim() : "";
+}
+
+function getCustomerAddressInput() {
+  const input = document.getElementById("customer-address");
+  return input ? input.value.trim() : "";
+}
+
+// Saves the order to Firestore for order history + the admin panel. The
+// financial fields (currentOrderTotal/total/balanceRemaining/paymentStatus)
+// all come from the single computeOrderFinancials() model in order-calc.js —
+// a brand-new order simply starts with Previous Balance and Payment Received
+// both at ₹0. Silently skips if Firebase hasn't been configured yet.
+async function saveOrderToFirestore(orderNo, shopName, customerName, customerPhone, customerAddress, total, hasUnpriced) {
   if (!isFirebaseReady()) return;
   try {
     const items = Object.keys(cart).map((id) => {
       const p = findProduct(id);
+      const qty = cart[id];
+      const price = p ? p.price : null;
       return {
         id,
         name: p ? p.name : id,
         brand: p ? p.brand : "",
+        sku: p ? p.sku || "" : "",
         unit: p ? p.unit : "",
-        price: p ? p.price : null,
-        qty: cart[id],
+        price,
+        qty,
+        lineTotal: price === null ? null : roundMoney(price * qty),
       };
     });
+
+    const financials = computeOrderFinancials({
+      items,
+      previousBalance: 0,
+      paymentReceived: 0,
+      discount: 0,
+    });
+
     await db
       .collection("orders")
       .doc(orderNo)
       .set({
         orderNo,
+        shopName: shopName || "",
         customerName: customerName || "",
         customerPhone: customerPhone || "",
+        customerAddress: customerAddress || "",
         items,
+        // Legacy field, kept for any old UI reading `total` directly —
+        // equals currentOrderTotal at creation time since previousBalance is 0.
         total,
         hasUnpriced,
-        status: "pending",
+        previousBalance: 0,
+        currentOrderTotal: financials.currentOrderTotal,
+        discount: 0,
+        paymentReceived: 0,
+        balanceRemaining: financials.balanceRemaining,
+        paymentStatus: financials.paymentStatus,
+        status: "pending", // Order Status — separate from Payment Status
+        auditLog: [],
+        notification: null,
         createdAt: firebase.firestore.FieldValue.serverTimestamp(),
       });
   } catch (err) {
@@ -563,7 +600,7 @@ async function saveOrderToFirestore(orderNo, customerName, customerPhone, total,
 // Assembles a new order from the live cart (items, totals, a fresh
 // sequential order number) and hands it to the shared PDF renderer.
 // Returns { doc, orderNo, total, hasUnpriced, filename }.
-async function buildOrderPDF(customerName, customerPhone) {
+async function buildOrderPDF(shopName, customerName, customerPhone, customerAddress) {
   const ids = Object.keys(cart);
   if (ids.length === 0) return null;
   if (!window.jspdf) {
@@ -586,15 +623,17 @@ async function buildOrderPDF(customerName, customerPhone) {
       const lineTotal = p.price === null ? null : Math.round(p.price * 100 * qty) / 100;
       if (lineTotal === null) hasUnpriced = true;
       else totalPaise += Math.round(lineTotal * 100);
-      return { name: p.name, brand: p.brand || "—", qty, price: p.price, lineTotal };
+      return { name: p.name, brand: p.brand || "—", sku: p.sku || "", qty, price: p.price, lineTotal };
     })
     .filter(Boolean);
   const total = totalPaise / 100;
 
   const result = renderOrderPDF({
     orderNo,
+    shopName,
     customerName,
     customerPhone,
+    customerAddress,
     items,
     total,
     hasUnpriced,
@@ -610,19 +649,21 @@ async function buildOrderPDF(customerName, customerPhone) {
 // do that (mainly desktop), it downloads the PDF and opens WhatsApp with a
 // message asking the customer to attach the file that just downloaded.
 async function shareOrderPDF() {
+  const shopName = getShopNameInput();
   const name = getCustomerName();
   const phone = getCustomerPhone();
-  if (!name || !phone) {
-    alert("Please enter your name and phone number so we can confirm your order.");
+  const address = getCustomerAddressInput();
+  if (!shopName || !name || !phone || !address) {
+    alert("Please fill in shop name, your name, phone number, and address so we can confirm your order.");
     return;
   }
 
-  const built = await buildOrderPDF(name, phone);
+  const built = await buildOrderPDF(shopName, name, phone, address);
   if (!built) return;
   const { doc, orderNo, total, hasUnpriced, filename } = built;
   const blob = doc.output("blob");
 
-  await saveOrderToFirestore(orderNo, name, phone, total, hasUnpriced);
+  await saveOrderToFirestore(orderNo, shopName, name, phone, address, total, hasUnpriced);
 
   const shareText =
     `Hello ${CONFIG.shopName}, here is my order request (ref ${orderNo}). ` +
@@ -657,15 +698,17 @@ async function shareOrderPDF() {
 }
 
 async function downloadOrderPDF() {
+  const shopName = getShopNameInput();
   const name = getCustomerName();
   const phone = getCustomerPhone();
-  if (!name || !phone) {
-    alert("Please enter your name and phone number so we can confirm your order.");
+  const address = getCustomerAddressInput();
+  if (!shopName || !name || !phone || !address) {
+    alert("Please fill in shop name, your name, phone number, and address so we can confirm your order.");
     return;
   }
-  const built = await buildOrderPDF(name, phone);
+  const built = await buildOrderPDF(shopName, name, phone, address);
   if (!built) return;
-  await saveOrderToFirestore(built.orderNo, name, phone, built.total, built.hasUnpriced);
+  await saveOrderToFirestore(built.orderNo, shopName, name, phone, address, built.total, built.hasUnpriced);
   built.doc.save(built.filename);
 }
 
