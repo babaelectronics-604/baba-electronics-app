@@ -950,6 +950,22 @@ function renderOrderDrawer() {
 // one more time (never trusting the last onscreen render), builds audit
 // entries for whatever changed, and — if Payment Received changed — writes
 // a customer-facing notification onto the order document.
+// If this order line item is linked to a real catalogue product (it has an
+// `id` that matches a document in the products collection), updates that
+// product's name too — so fixing a typo from an order also fixes it on the
+// shop page and the Products tab, not just this one order. Manually-added
+// line items, or items whose linked product was since deleted, have no
+// match — those are left as order-only edits.
+async function syncItemNameToCatalog(item, newName) {
+  if (!item || !item.id) return { synced: false, reason: "no-link" };
+  const product = productsCache.find((p) => p.id === item.id);
+  if (!product) return { synced: false, reason: "not-found" };
+  if (product.name === newName) return { synced: true };
+  await db.collection("products").doc(item.id).update({ name: newName });
+  product.name = newName; // keep the in-memory Products tab cache in sync
+  return { synced: true };
+}
+
 async function saveOrderEdits() {
   if (!editingOrder || !editingOrderNo) return null;
   const original = ordersCache.find((o) => o.orderNo === editingOrderNo);
@@ -1471,28 +1487,37 @@ document.addEventListener("DOMContentLoaded", () => {
     if (saveNameBtn) {
       const idx = Number(saveNameBtn.dataset.idx);
       const item = editingOrder.items[idx];
-      if (item && !String(item.name || "").trim()) {
+      const newName = item ? String(item.name || "").trim() : "";
+      if (item && !newName) {
         alert("Product name can't be empty.");
         return;
       }
+      item.name = newName;
       const statusEl = document.getElementById("od-save-status");
       saveNameBtn.disabled = true;
       saveNameBtn.textContent = "Saving…";
-      saveOrderEdits()
-        .then(() => {
+      (async () => {
+        try {
+          await saveOrderEdits();
+          const catalogResult = await syncItemNameToCatalog(item, newName);
           editingItemIdx = null;
           renderItemsTable();
           if (statusEl) {
             statusEl.className = "state-message";
-            statusEl.textContent = "Product name updated and saved.";
+            statusEl.textContent =
+              catalogResult.synced
+                ? "Saved — updated on this order and in the product catalogue."
+                : "Saved on this order. This line item isn't linked to a catalogue product (" +
+                  (catalogResult.reason === "not-found" ? "the linked product may have been deleted" : "it was added manually") +
+                  "), so the catalogue itself wasn't changed.";
             statusEl.hidden = false;
           }
-        })
-        .catch((err) => {
+        } catch (err) {
           saveNameBtn.disabled = false;
           saveNameBtn.textContent = "Save";
           alert("Could not save: " + err.message);
-        });
+        }
+      })();
       return;
     }
 
