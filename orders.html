@@ -49,7 +49,8 @@ function statusLabel(s) {
 
 function formatPrice(price) {
   if (price === null || price === undefined) return "Contact for price";
-  return "₹" + price.toLocaleString("en-IN");
+  const hasCents = Math.round(price * 100) % 100 !== 0;
+  return "₹" + price.toLocaleString("en-IN", { minimumFractionDigits: hasCents ? 2 : 0, maximumFractionDigits: 2 });
 }
 
 function renderOrders(orders) {

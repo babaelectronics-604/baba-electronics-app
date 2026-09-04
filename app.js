@@ -5,6 +5,9 @@
    STATE
    ============================================================ */
 let activeCategory = "all";
+let activeSubcategory = "all"; // only meaningful when activeCategory has subcategories
+let activeBrand = "all"; // brandId, or "all"
+let sortOrder = "default"; // "default" | "price-asc" | "price-desc" | "name-asc"
 let searchQuery = "";
 let cart = loadCart(); // { productId: quantity }
 let pendingQty = {}; // { productId: quantity chosen on the card, before "Add to cart" }
@@ -36,7 +39,10 @@ async function loadProductCatalog() {
    ============================================================ */
 function formatPrice(price) {
   if (price === null || price === undefined) return "Contact for price";
-  return "₹" + price.toLocaleString("en-IN");
+  // Show exactly 2 decimal places for amounts with cents (₹1.80, ₹99.99),
+  // but keep whole-rupee amounts clean (₹500, not ₹500.00).
+  const hasCents = Math.round(price * 100) % 100 !== 0;
+  return "₹" + price.toLocaleString("en-IN", { minimumFractionDigits: hasCents ? 2 : 0, maximumFractionDigits: 2 });
 }
 
 // formatPriceForPDF() now lives in pdf-builder.js (shared with admin.html).
@@ -45,9 +51,17 @@ function findProduct(id) {
   return PRODUCTS.find((p) => p.id === id);
 }
 
-function categoryLabelFor(id) {
-  const cat = CATEGORIES.find((c) => c.id === id);
-  return cat ? cat.label : id;
+// categoryLabelFor() / subcategoryLabelFor() / brandLabelFor() now live in
+// taxonomy.js (shared with admin.html), loaded before this file.
+
+// A product may only have the legacy `category`/`brand` text fields (if it
+// was added before the category/brand taxonomy update) — these fall back
+// gracefully so nothing breaks for older records.
+function productCategoryId(p) {
+  return p.categoryId || p.category || "other";
+}
+function productBrandId(p) {
+  return p.brandId || "";
 }
 
 function loadCart() {
@@ -75,16 +89,39 @@ function waLink(message) {
    RENDER: PRODUCT GRID
    ============================================================ */
 function getVisibleProducts() {
-  return PRODUCTS.filter((p) => {
-    const matchesCategory = activeCategory === "all" || p.category === activeCategory;
+  let list = PRODUCTS.filter((p) => {
+    const catId = productCategoryId(p);
+    const matchesCategory = activeCategory === "all" || catId === activeCategory;
+    const matchesSubcategory =
+      activeCategory === "all" || activeSubcategory === "all" || (p.subcategoryId || null) === activeSubcategory;
+    const matchesBrand = activeBrand === "all" || productBrandId(p) === activeBrand;
+
     const q = searchQuery.trim().toLowerCase();
     const matchesSearch =
       q === "" ||
       p.name.toLowerCase().includes(q) ||
       p.brand.toLowerCase().includes(q) ||
-      p.category.toLowerCase().includes(q);
-    return matchesCategory && matchesSearch;
+      catId.toLowerCase().includes(q) ||
+      categoryLabelFor(catId).toLowerCase().includes(q);
+
+    return matchesCategory && matchesSubcategory && matchesBrand && matchesSearch;
   });
+
+  if (sortOrder === "price-asc" || sortOrder === "price-desc") {
+    // Unpriced ("Contact for price") items always sort to the end,
+    // regardless of direction — there's no meaningful price to rank them by.
+    const dir = sortOrder === "price-asc" ? 1 : -1;
+    list = list.slice().sort((a, b) => {
+      if (a.price === null && b.price === null) return 0;
+      if (a.price === null) return 1;
+      if (b.price === null) return -1;
+      return (a.price - b.price) * dir;
+    });
+  } else if (sortOrder === "name-asc") {
+    list = list.slice().sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  return list;
 }
 
 function renderProducts() {
@@ -93,6 +130,7 @@ function renderProducts() {
   const list = getVisibleProducts();
 
   grid.innerHTML = "";
+  renderActiveFilterBar();
 
   if (list.length === 0) {
     empty.hidden = false;
@@ -135,14 +173,62 @@ function renderProducts() {
 }
 
 /* ============================================================
+   RENDER: "Shopping X in Category > Subcategory" bar + clear link,
+   shown above the product grid whenever a brand/category/subcategory
+   filter is active. Also renders subcategory chips when the active
+   category has any.
+   ============================================================ */
+function renderActiveFilterBar() {
+  const bar = document.getElementById("active-filter-bar");
+  if (!bar) return;
+
+  const pieces = [];
+  if (activeBrand !== "all") pieces.push(brandLabelFor(activeBrand));
+  if (activeCategory !== "all") {
+    pieces.push(
+      activeSubcategory !== "all"
+        ? subcategoryLabelFor(activeCategory, activeSubcategory)
+        : categoryLabelFor(activeCategory)
+    );
+  }
+
+  const cat = activeCategory !== "all" ? CATEGORIES.find((c) => c.id === activeCategory) : null;
+  const subs = cat ? activeSubcategoriesSorted(cat.id) : [];
+
+  const chipsHtml = subs.length
+    ? `<div class="subcat-chip-row">
+         <button class="subcat-chip${activeSubcategory === "all" ? " is-active" : ""}" data-subcategory="all">All</button>
+         ${subs
+           .map(
+             (s) =>
+               `<button class="subcat-chip${activeSubcategory === s.id ? " is-active" : ""}" data-subcategory="${s.id}">${s.label}</button>`
+           )
+           .join("")}
+       </div>`
+    : "";
+
+  if (pieces.length === 0 && !chipsHtml) {
+    bar.hidden = true;
+    bar.innerHTML = "";
+    return;
+  }
+
+  bar.hidden = false;
+  bar.innerHTML = `
+    ${pieces.length ? `<div class="active-filter-row"><span>Showing: <strong>${pieces.join(" — ")}</strong></span><button class="text-link" id="clear-filters-btn">Clear</button></div>` : ""}
+    ${chipsHtml}
+  `;
+}
+
+/* ============================================================
    RENDER: CATEGORY GRID (counts update live with search)
    ============================================================ */
 function renderCategories() {
   const grid = document.getElementById("category-grid");
   grid.innerHTML = "";
 
-  CATEGORIES.forEach((cat) => {
-    const count = PRODUCTS.filter((p) => p.category === cat.id).length;
+  activeCategoriesSorted().forEach((cat) => {
+    const count = PRODUCTS.filter((p) => productCategoryId(p) === cat.id).length;
     const card = document.createElement("button");
     card.className = "category-card" + (activeCategory === cat.id ? " is-active" : "");
     card.dataset.category = cat.id;
@@ -150,6 +236,28 @@ function renderCategories() {
       <span class="category-name">${cat.label}</span>
       <span class="category-count">${count} items</span>
     `;
+    grid.appendChild(card);
+  });
+}
+
+/* ============================================================
+   RENDER: SHOP BY BRAND
+   ============================================================ */
+function renderBrands() {
+  const grid = document.getElementById("brand-grid");
+  if (!grid) return;
+  grid.innerHTML = "";
+
+  activeBrandsSorted().forEach((brand) => {
+    const count = PRODUCTS.filter((p) => productBrandId(p) === brand.id).length;
+    if (count === 0) return; // don't show a brand tile that has no products yet
+    const card = document.createElement("button");
+    card.className = "brand-card" + (activeBrand === brand.id ? " is-active" : "");
+    card.dataset.brand = brand.id;
+    card.innerHTML = brand.logo
+      ? `<img src="${brand.logo}" alt="${brand.name}" class="brand-logo-img" />`
+      : `<span class="brand-initial">${brand.name.charAt(0)}</span>`;
+    card.innerHTML += `<span class="brand-name-label">${brand.name}</span>`;
     grid.appendChild(card);
   });
 }
@@ -212,13 +320,13 @@ function renderProductDetail(p) {
   const priceRow = `
     <div class="detail-price-row">
       <span class="detail-price">${formatPrice(p.price)}</span>
-      ${showMrp ? `<span class="detail-mrp">₹${Number(p.mrp).toLocaleString("en-IN")}</span>` : ""}
+      ${showMrp ? `<span class="detail-mrp">${formatPrice(Number(p.mrp))}</span>` : ""}
     </div>`;
 
   const metaRows = [];
   if (p.sku) metaRows.push(`<div class="detail-meta-row"><span>SKU / Code</span><span>${p.sku}</span></div>`);
   metaRows.push(`<div class="detail-meta-row"><span>Brand</span><span>${p.brand}</span></div>`);
-  metaRows.push(`<div class="detail-meta-row"><span>Category</span><span>${categoryLabelFor(p.category)}</span></div>`);
+  metaRows.push(`<div class="detail-meta-row"><span>Category</span><span>${categoryLabelFor(productCategoryId(p))}${p.subcategoryId ? " › " + subcategoryLabelFor(productCategoryId(p), p.subcategoryId) : ""}</span></div>`);
   metaRows.push(`<div class="detail-meta-row"><span>Unit</span><span>${p.unit}</span></div>`);
   if (p.stock !== undefined && p.stock !== null && p.stock !== "") {
     metaRows.push(`<div class="detail-meta-row"><span>In stock</span><span>${p.stock}</span></div>`);
@@ -304,7 +412,10 @@ function cartCount() {
 }
 
 function cartTotal() {
-  let total = 0;
+  // Accumulate in paise (integer minor units) rather than rupees so
+  // repeated floating-point addition of decimal prices (₹1.80, ₹2.50…)
+  // can't drift — then convert back to rupees once at the end.
+  let totalPaise = 0;
   let hasUnpriced = false;
   Object.entries(cart).forEach(([id, qty]) => {
     const p = findProduct(id);
@@ -312,10 +423,10 @@ function cartTotal() {
     if (p.price === null) {
       hasUnpriced = true;
     } else {
-      total += p.price * qty;
+      totalPaise += Math.round(p.price * 100) * qty;
     }
   });
-  return { total, hasUnpriced };
+  return { total: totalPaise / 100, hasUnpriced };
 }
 
 function renderCartBadge() {
@@ -463,19 +574,22 @@ async function buildOrderPDF(customerName, customerPhone) {
   const orderNo = await generateOrderNumber();
   const now = new Date();
 
-  let total = 0;
+  let totalPaise = 0;
   let hasUnpriced = false;
   const items = ids
     .map((id) => {
       const p = findProduct(id);
       if (!p) return null;
       const qty = cart[id];
-      const lineTotal = p.price === null ? null : p.price * qty;
+      // Paise-safe: round each line to the nearest paisa before summing,
+      // same reasoning as cartTotal() above.
+      const lineTotal = p.price === null ? null : Math.round(p.price * 100 * qty) / 100;
       if (lineTotal === null) hasUnpriced = true;
-      else total += lineTotal;
+      else totalPaise += Math.round(lineTotal * 100);
       return { name: p.name, brand: p.brand || "—", qty, price: p.price, lineTotal };
     })
     .filter(Boolean);
+  const total = totalPaise / 100;
 
   const result = renderOrderPDF({
     orderNo,
@@ -568,6 +682,7 @@ function contactShop(topic) {
 document.addEventListener("DOMContentLoaded", async () => {
   await loadProductCatalog();
   renderCategories();
+  renderBrands();
   renderProducts();
   renderCartBadge();
   renderCartPanel();
@@ -585,17 +700,65 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!card) return;
     const cat = card.dataset.category;
     activeCategory = activeCategory === cat ? "all" : cat;
+    activeSubcategory = "all"; // switching category always resets any subcategory filter
     renderCategories();
     renderProducts();
     document.getElementById("shop").scrollIntoView({ behavior: "smooth", block: "start" });
   });
 
+  // Shop by Brand clicks
+  const brandGrid = document.getElementById("brand-grid");
+  if (brandGrid) {
+    brandGrid.addEventListener("click", (e) => {
+      const card = e.target.closest(".brand-card");
+      if (!card) return;
+      const brand = card.dataset.brand;
+      activeBrand = activeBrand === brand ? "all" : brand;
+      renderBrands();
+      renderProducts();
+      document.getElementById("shop").scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
+  // Subcategory chips + "Clear" link, both rendered inside #active-filter-bar
+  const activeFilterBar = document.getElementById("active-filter-bar");
+  if (activeFilterBar) {
+    activeFilterBar.addEventListener("click", (e) => {
+      const chip = e.target.closest(".subcat-chip");
+      if (chip) {
+        activeSubcategory = chip.dataset.subcategory;
+        renderProducts();
+        return;
+      }
+      if (e.target.id === "clear-filters-btn") {
+        activeCategory = "all";
+        activeSubcategory = "all";
+        activeBrand = "all";
+        renderCategories();
+        renderBrands();
+        renderProducts();
+      }
+    });
+  }
+
+  // Sort dropdown
+  const sortSelect = document.getElementById("sort-select");
+  if (sortSelect) {
+    sortSelect.addEventListener("change", (e) => {
+      sortOrder = e.target.value;
+      renderProducts();
+    });
+  }
+
   // "View all categories" clears filter
   document.getElementById("view-all-categories").addEventListener("click", () => {
     activeCategory = "all";
+    activeSubcategory = "all";
+    activeBrand = "all";
     searchQuery = "";
     searchInput.value = "";
     renderCategories();
+    renderBrands();
     renderProducts();
   });
 

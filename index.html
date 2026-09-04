@@ -92,13 +92,32 @@
   </div>
 </section>
 
+<!-- ================= SHOP BY BRAND ================= -->
+<section class="brand-section" id="brands">
+  <div class="wrap">
+    <div class="section-heading">
+      <h2>Shop by brand</h2>
+    </div>
+    <div class="brand-grid" id="brand-grid"></div>
+  </div>
+</section>
+
 <!-- ================= PRODUCT GRID ================= -->
 <section class="shop-section" id="shop">
   <div class="wrap">
     <div class="section-heading">
       <h2>Featured materials</h2>
-      <p class="rating-note">4.6 stars based on 8 reviews</p>
+      <div class="shop-heading-controls">
+        <p class="rating-note">4.6 stars based on 8 reviews</p>
+        <select class="sort-select" id="sort-select" aria-label="Sort products">
+          <option value="default">Sort: Featured</option>
+          <option value="price-asc">Price: Low to High</option>
+          <option value="price-desc">Price: High to Low</option>
+          <option value="name-asc">Name: A to Z</option>
+        </select>
+      </div>
     </div>
+    <div class="active-filter-bar" id="active-filter-bar" hidden></div>
     <div class="product-grid" id="product-grid"></div>
     <p class="empty-state" id="empty-state" hidden>No products match your search. Try a different term, or <button class="text-link" data-contact="a product you couldn't find">ask us directly on WhatsApp</button>.</p>
   </div>
@@ -166,6 +185,7 @@
 <script src="firebase-config.js"></script>
 <script src="config.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="taxonomy.js"></script>
 <script src="products.js"></script>
 <script src="logo-data.js"></script>
 <script src="pdf-builder.js"></script>

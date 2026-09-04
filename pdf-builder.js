@@ -62,7 +62,8 @@ function amountInWords(amount) {
 // so PDFs use "Rs." instead — the website itself still shows ₹ everywhere.
 function formatPriceForPDF(price) {
   if (price === null || price === undefined) return "—";
-  return "Rs. " + price.toLocaleString("en-IN");
+  const hasCents = Math.round(price * 100) % 100 !== 0;
+  return "Rs. " + price.toLocaleString("en-IN", { minimumFractionDigits: hasCents ? 2 : 0, maximumFractionDigits: 2 });
 }
 
 // Turns a name/order-no into a safe filename fragment: trims, swaps

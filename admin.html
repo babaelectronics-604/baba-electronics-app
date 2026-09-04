@@ -114,23 +114,27 @@
             </div>
             <div>
               <label for="pf-brand">Brand</label>
-              <input type="text" id="pf-brand" required />
+              <select id="pf-brand" required></select>
             </div>
             <div>
               <label for="pf-category">Category</label>
               <select id="pf-category" required></select>
             </div>
+            <div id="pf-subcategory-row" hidden>
+              <label for="pf-subcategory">Subcategory</label>
+              <select id="pf-subcategory"></select>
+            </div>
             <div>
-              <label for="pf-unit">Unit</label>
+              <label for="pf-unit">Sold per</label>
               <input type="text" id="pf-unit" placeholder="piece, meter, box…" required />
             </div>
             <div>
               <label for="pf-price">Selling price (₹) — leave blank for "Contact for price"</label>
-              <input type="number" id="pf-price" min="0" step="0.01" />
+              <input type="number" id="pf-price" min="0" step="0.01" inputmode="decimal" placeholder="e.g. 1.80" />
             </div>
             <div>
               <label for="pf-mrp">MRP (₹, optional)</label>
-              <input type="number" id="pf-mrp" min="0" step="0.01" />
+              <input type="number" id="pf-mrp" min="0" step="0.01" inputmode="decimal" placeholder="e.g. 2.50" />
             </div>
             <div>
               <label for="pf-sku">SKU / Product code (optional)</label>
@@ -229,13 +233,17 @@
 <script src="firebase-config.js"></script>
 <script src="config.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="taxonomy.js"></script>
 <script src="products.js"></script>
 <script src="logo-data.js"></script>
 <script src="pdf-builder.js"></script>
 <script>
 function formatPrice(price) {
   if (price === null || price === undefined) return "Contact for price";
-  return "₹" + price.toLocaleString("en-IN");
+  // Show exactly 2 decimal places for amounts with cents (₹1.80, ₹99.99),
+  // but keep whole-rupee amounts clean (₹500, not ₹500.00).
+  const hasCents = Math.round(price * 100) % 100 !== 0;
+  return "₹" + price.toLocaleString("en-IN", { minimumFractionDigits: hasCents ? 2 : 0, maximumFractionDigits: 2 });
 }
 
 const STATUSES = ["pending", "confirmed", "fulfilled", "cancelled"];
@@ -298,7 +306,9 @@ let activeCustomerPhone = null; // phone of the customer currently open in the d
 let editingPaymentId = null; // set while the Add Payment form is editing an existing payment
 
 function formatPriceSigned(n) {
-  return "₹" + Math.abs(n).toLocaleString("en-IN");
+  const abs = Math.abs(n);
+  const hasCents = Math.round(abs * 100) % 100 !== 0;
+  return "₹" + abs.toLocaleString("en-IN", { minimumFractionDigits: hasCents ? 2 : 0, maximumFractionDigits: 2 });
 }
 
 // Groups orders + payments by phone number into one summary per customer.
@@ -601,9 +611,61 @@ function populateCategoryDropdown() {
   select.innerHTML = CATEGORIES.map((c) => `<option value="${c.id}">${c.label}</option>`).join("");
 }
 
+function populateBrandDropdown() {
+  const select = document.getElementById("pf-brand");
+  // Show every known brand (including ones hidden from the storefront's
+  // "Shop by Brand" strip, like the "Other / Local Stock" catch-all) —
+  // active/inactive only controls what shoppers see, not what admin can pick.
+  select.innerHTML = BRANDS.slice()
+    .sort((a, b) => a.displayOrder - b.displayOrder)
+    .map((b) => `<option value="${b.id}">${b.name}</option>`)
+    .join("");
+}
+
+// Repopulates the subcategory dropdown for whichever category is currently
+// selected, and shows/hides the whole row (some categories, like Cables,
+// don't have any subcategories yet).
+function populateSubcategoryDropdown(categoryId, selectedSubcategoryId) {
+  const row = document.getElementById("pf-subcategory-row");
+  const select = document.getElementById("pf-subcategory");
+  const cat = CATEGORIES.find((c) => c.id === categoryId);
+  const subs = cat ? cat.subcategories : [];
+  if (!subs.length) {
+    row.hidden = true;
+    select.innerHTML = "";
+    return;
+  }
+  row.hidden = false;
+  select.innerHTML =
+    `<option value="">— none —</option>` +
+    subs
+      .slice()
+      .sort((a, b) => a.displayOrder - b.displayOrder)
+      .map((s) => `<option value="${s.id}">${s.label}</option>`)
+      .join("");
+  select.value = selectedSubcategoryId || "";
+}
+
 function categoryLabel(id) {
-  const cat = CATEGORIES.find((c) => c.id === id);
-  return cat ? cat.label : id;
+  return categoryLabelFor(id); // from taxonomy.js
+}
+
+// Best-effort match for pre-migration Firestore records that only have the
+// free-text `brand` field, not a brandId — used so editing an old product
+// doesn't silently blank out its brand in the dropdown.
+function matchBrandIdByName(brandText) {
+  if (!brandText) return null;
+  const norm = String(brandText).trim().toLowerCase();
+  const hit = BRANDS.find((b) => b.name.toLowerCase() === norm);
+  return hit ? hit.id : null;
+}
+
+// "Category" or "Category > Subcategory" for table rows / search text.
+function categoryDisplayFor(p) {
+  const catId = p.categoryId || p.category;
+  const label = categoryLabelFor(catId);
+  const subLabel = p.subcategoryId ? subcategoryLabelFor(catId, p.subcategoryId) : "";
+  return subLabel ? `${label} \u203a ${subLabel}` : label;
 }
 
 function renderProductsTable(products) {
@@ -623,7 +685,7 @@ function renderProductsTable(products) {
       <td>${p.image ? `<img src="${p.image}" class="admin-thumb" alt="${p.name}" />` : `<div class="admin-thumb admin-thumb-empty">${p.name.charAt(0)}</div>`}</td>
       <td><strong>${p.name}</strong>${p.tag ? `<br><span style="color:#8a9998;font-size:11px;">${p.tag}</span>` : ""}</td>
       <td>${p.brand}</td>
-      <td>${categoryLabel(p.category)}</td>
+      <td>${categoryDisplayFor(p)}</td>
       <td>${formatPrice(p.price)}</td>
       <td>
         <button class="text-link" data-action="edit" data-id="${p.id}">Edit</button>
@@ -646,7 +708,7 @@ function getFilteredProducts() {
       (p.name && p.name.toLowerCase().includes(q)) ||
       (p.brand && p.brand.toLowerCase().includes(q)) ||
       (p.category && p.category.toLowerCase().includes(q)) ||
-      categoryLabel(p.category).toLowerCase().includes(q) ||
+      categoryDisplayFor(p).toLowerCase().includes(q) ||
       (p.tag && p.tag.toLowerCase().includes(q))
     );
   });
@@ -711,6 +773,7 @@ function resetProductForm() {
   currentImages = [];
   renderImagePreviews();
   document.getElementById("pf-status").hidden = true;
+  populateSubcategoryDropdown(document.getElementById("pf-category").value, null);
 }
 
 function openProductForm() {
@@ -744,8 +807,22 @@ function fillFormForEdit(product) {
   document.getElementById("pf-submit").textContent = "Update product";
   document.getElementById("pf-doc-id").value = product.id;
   document.getElementById("pf-name").value = product.name || "";
-  document.getElementById("pf-brand").value = product.brand || "";
-  document.getElementById("pf-category").value = product.category || "";
+
+  // Brand: prefer the normalized brandId (present on anything migrated or
+  // saved since this update). Older Firestore records saved before then
+  // only have the free-text `brand` field — try to match it to a known
+  // brand by name so the dropdown still lands on the right one instead of
+  // silently resetting to the first option.
+  const brandId = product.brandId || matchBrandIdByName(product.brand);
+  document.getElementById("pf-brand").value = brandId || BRANDS[0].id;
+
+  // Category/subcategory: same idea — fall back to the legacy `category`
+  // string (still a valid category id for everything except the new
+  // Appliances split) if this record predates categoryId/subcategoryId.
+  const categoryId = product.categoryId || product.category || CATEGORIES[0].id;
+  document.getElementById("pf-category").value = categoryId;
+  populateSubcategoryDropdown(categoryId, product.subcategoryId || null);
+
   document.getElementById("pf-unit").value = product.unit || "";
   document.getElementById("pf-price").value = product.price === null || product.price === undefined ? "" : product.price;
   document.getElementById("pf-mrp").value = product.mrp === null || product.mrp === undefined ? "" : product.mrp;
@@ -766,6 +843,10 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   populateCategoryDropdown();
+  populateBrandDropdown();
+  document.getElementById("pf-category").addEventListener("change", (e) => {
+    populateSubcategoryDropdown(e.target.value, null);
+  });
 
   const loginView = document.getElementById("login-view");
   const adminView = document.getElementById("admin-view");
@@ -897,13 +978,48 @@ document.addEventListener("DOMContentLoaded", () => {
     const priceRaw = document.getElementById("pf-price").value;
     const mrpRaw = document.getElementById("pf-mrp").value;
 
+    // Parse a price/MRP input as a non-negative decimal, rounded to exactly
+    // 2 decimal places (paise-safe — avoids raw float artifacts like
+    // 1.8 * 100 / 100 or 19.9999999999996 creeping into the database).
+    function parseMoney(raw, fieldLabel) {
+      if (raw === "") return { value: null };
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0) {
+        return { error: `${fieldLabel} must be a non-negative number (e.g. 1.80).` };
+      }
+      return { value: Math.round(n * 100) / 100 };
+    }
+
+    const priceParsed = parseMoney(priceRaw, "Selling price");
+    const mrpParsed = parseMoney(mrpRaw, "MRP");
+    if (priceParsed.error || mrpParsed.error) {
+      statusEl.className = "state-message";
+      statusEl.textContent = priceParsed.error || mrpParsed.error;
+      statusEl.hidden = false;
+      return;
+    }
+
+    const categoryId = document.getElementById("pf-category").value;
+    const subcategoryId = document.getElementById("pf-subcategory-row").hidden
+      ? null
+      : document.getElementById("pf-subcategory").value || null;
+    const brandId = document.getElementById("pf-brand").value;
+    const brandName = brandLabelFor(brandId);
+
     const data = {
       name: document.getElementById("pf-name").value.trim(),
-      brand: document.getElementById("pf-brand").value.trim(),
-      category: document.getElementById("pf-category").value,
+      // brandId/categoryId/subcategoryId are the source of truth going
+      // forward (drive brand pages + category/subcategory filtering).
+      // `brand`/`category` are kept in sync as plain text purely for
+      // backward compatibility with anything still reading those fields.
+      brandId,
+      brand: brandName,
+      categoryId,
+      category: categoryId,
+      subcategoryId,
       unit: document.getElementById("pf-unit").value.trim(),
-      price: priceRaw === "" ? null : Number(priceRaw),
-      mrp: mrpRaw === "" ? null : Number(mrpRaw),
+      price: priceParsed.value,
+      mrp: mrpParsed.value,
       sku: document.getElementById("pf-sku").value.trim(),
       stock: document.getElementById("pf-stock").value.trim(),
       tag: document.getElementById("pf-tag").value.trim(),

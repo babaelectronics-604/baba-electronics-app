@@ -386,6 +386,133 @@ a {
   color: #6a7c8c;
 }
 
+/* ---------------- SHOP BY BRAND ---------------- */
+.brand-section {
+  background: var(--cream);
+  padding: 0 0 42px;
+}
+
+.brand-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 12px;
+}
+
+.brand-card {
+  background: #ffffff;
+  border: 2px solid transparent;
+  border-radius: var(--radius-md);
+  padding: 16px 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 1px 3px rgba(16, 39, 55, 0.08);
+}
+
+.brand-card.is-active {
+  border-color: var(--teal);
+}
+
+.brand-logo-img {
+  width: 44px;
+  height: 44px;
+  object-fit: contain;
+}
+
+.brand-initial {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--navy-panel);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 18px;
+}
+
+.brand-name-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--slate);
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .brand-grid {
+    grid-auto-flow: column;
+    grid-template-columns: none;
+    grid-template-rows: 1fr;
+    overflow-x: auto;
+    padding-bottom: 6px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .brand-card {
+    min-width: 92px;
+  }
+}
+
+/* ---------------- SORT + ACTIVE FILTER BAR ---------------- */
+.shop-heading-controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.sort-select {
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--slate);
+  border: 1px solid #d7ded9;
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  background: #fff;
+}
+
+.active-filter-bar {
+  margin: -8px 0 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.active-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+  color: #4d6167;
+}
+
+.active-filter-row strong {
+  color: var(--slate);
+}
+
+.subcat-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.subcat-chip {
+  background: #e7edf5;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--slate);
+  font-family: var(--font-body);
+}
+
+.subcat-chip.is-active {
+  background: var(--teal);
+  color: #fff;
+}
+
 /* ---------------- SHOP / PRODUCT GRID ---------------- */
 .shop-section {
   background: var(--cream);
@@ -1307,6 +1434,9 @@ textarea:focus {
   }
   .product-grid {
     grid-template-columns: repeat(2, 1fr);
+  }
+  .shop-heading-controls {
+    flex-wrap: wrap;
   }
   .site-footer {
     flex-direction: column;
