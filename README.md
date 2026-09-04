@@ -7,11 +7,17 @@ WhatsApp, customer order history, and a password-protected admin panel.
 ## What's in here
 - `index.html` — the shop page
 - `orders.html` — customer-facing "My Orders" lookup (by phone number)
-- `admin.html` — password-protected admin panel: manage orders **and products**
-- `style.css` — all the visual styling, shared by all three pages
+- `admin.html` — password-protected admin panel: manage orders **and products**,
+  search products, and regenerate any order's PDF
+- `style.css` — all the visual styling, shared by all pages
 - `products.js` — **starter catalog only** (see below) — after setup, manage
   products from the admin panel instead
-- `app.js` — the shop page's logic (search, cart, PDF, WhatsApp)
+- `config.js` — shop name, address, and WhatsApp number — shared by the shop
+  page, the admin panel, and PDF generation
+- `app.js` — the shop page's logic (search, cart, checkout, WhatsApp)
+- `pdf-builder.js` — the order-PDF layout, shared by the shop page (new
+  orders) and the admin panel (regenerating a past order's PDF), so both
+  always produce an identical-looking document
 - `firebase-config.js` — your database connection details (see setup below)
 - `logo.png` / `logo-data.js` — your shop logo, shown on every page and
   printed on the order PDF (`logo-data.js` is just `logo.png` re-encoded
@@ -63,6 +69,9 @@ Google account.
          allow read: if true;
          allow write: if request.auth != null;
        }
+       match /payments/{paymentId} {
+         allow read, write: if request.auth != null;
+       }
        match /meta/{docId} {
          allow read, write: if true;
        }
@@ -71,10 +80,11 @@ Google account.
    ```
    Click **Publish**. (Note: this lets anyone who knows how to query the
    database read order and product data — acceptable for a small local
-   shop, but not bank-grade privacy. *Writing* products or orders always
-   requires being logged in as admin. When you're ready for the WhatsApp
-   Business API phase, that's the natural point to lock this down further
-   with a proper backend.)
+   shop, but not bank-grade privacy. *Writing* products or orders, and
+   *reading or writing payments at all*, always requires being logged in
+   as admin — payment records are never exposed publicly. When you're
+   ready for the WhatsApp Business API phase, that's the natural point to
+   lock this down further with a proper backend.)
 
 5. In the left sidebar, go to **Build → Authentication → Get started**,
    enable the **Email/Password** sign-in method, then go to the **Users**
@@ -99,6 +109,9 @@ click the **Products** tab:
   "Best seller", and an optional photo. Photos are automatically resized
   and compressed in your browser before saving, so there's no file-size
   limit to worry about.
+- **Search box** — filters the product list live by name, brand, or
+  category as you type, so finding one item in a large catalog to fix a
+  price or swap a photo doesn't mean scrolling through everything.
 - Click **Edit** on any product to change it, or **Delete** to remove it.
   Changes appear on the shop page immediately — no re-deployment needed.
 - The first time you set this up, click **Import starter catalog** (shown
@@ -146,7 +159,58 @@ for you) since the PDF reads from that file, not `logo.png` directly.
 - **`admin.html`** ("Admin" link in the footer) — log in with the email/
   password you created in Firebase Authentication (step 5 above) to see
   every order from every customer, change an order's status (Pending →
-  Confirmed → Fulfilled, or Cancelled), or delete an order.
+  Confirmed → Fulfilled, or Cancelled), delete an order, or click **PDF**
+  on any order to regenerate and download its order slip — useful if a
+  customer lost their copy, since it's rebuilt from the same saved data
+  and looks identical to the one they originally got.
+
+## Product details view
+Clicking a product's photo or name (on the shop page) opens a detail view
+with a larger image (with a thumbnail gallery if you've uploaded more than
+one photo for that product in the admin panel), full description, SKU,
+price and MRP, stock, unit, and its own quantity selector and "Add to
+cart" button. Works as a centered dialog on desktop and a full-screen
+sheet on mobile.
+
+Every time something is added to the cart — from the shop grid or from
+this detail view — a small "✓ Product added to cart" notification appears
+for about a second and disappears on its own.
+
+## Customers & Payments (admin panel)
+> **If your Firebase project is already set up from before:** the payments
+> feature needs one new rule added to what you published earlier. Go to
+> Firestore → **Rules**, and add this block inside `match /databases/...`
+> alongside your existing `orders`/`products`/`meta` rules (the full
+> updated rules are in the setup section above if you'd rather just
+> replace the whole thing):
+> ```
+> match /payments/{paymentId} {
+>   allow read, write: if request.auth != null;
+> }
+> ```
+> Click **Publish**. Skip this if you're setting the project up fresh —
+> it's already included in the rules above.
+
+The **Customers & Payments** tab in `admin.html` turns your order history
+into a running ledger per customer:
+
+- **Summary cards** at the top show Total Sales, Total Payments Received,
+  Total Outstanding/Due, Total Advance, and how many customers currently
+  have a due or advance balance.
+- **Customer list** — every phone number that's placed an order, with
+  their total order value, total paid, and a status badge: **red "Due:
+  ₹X"**, **green "Advance: ₹X"**, or a neutral **"Paid in Full"**.
+  Cancelled orders don't count toward what a customer owes. Search by
+  name or phone to find someone quickly.
+- Click **View / Record payment** on any customer to open their full
+  profile: the same summary, a **Record a payment** form (amount, method
+  — Cash / UPI / Bank Transfer / Card / Other — plus an optional
+  reference number and note), their full **payment history** (with Edit
+  and Delete on each entry), and their recent orders.
+- Payments are stored permanently in the database the moment they're
+  recorded — they survive refreshes, logging out, and reopening the
+  customer later. Editing or deleting a payment immediately recalculates
+  that customer's due/advance balance and the dashboard totals.
 
 ## About fully automatic WhatsApp sending
 Right now, sending still needs one tap from the customer (the share
@@ -166,9 +230,9 @@ to build the integration once you have it.
 2. **Upload the files.** On the new repo's page, click **"uploading an
    existing file"** (or the **Add file → Upload files** button), then drag
    in every file from this folder: `index.html`, `orders.html`,
-   `admin.html`, `style.css`, `app.js`, `products.js`,
-   `firebase-config.js`, `logo.png`, `logo-data.js`, `README.md`. Commit
-   the upload.
+   `admin.html`, `style.css`, `app.js`, `pdf-builder.js`, `config.js`,
+   `products.js`, `firebase-config.js`, `logo.png`, `logo-data.js`,
+   `README.md`. Commit the upload.
 
 3. **Turn on Pages.** In the repo, go to **Settings → Pages** (left
    sidebar). Under "Build and deployment", set **Source** to

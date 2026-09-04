@@ -51,6 +51,7 @@
     <div class="admin-tabs">
       <button class="admin-tab is-active" id="tab-orders">Orders</button>
       <button class="admin-tab" id="tab-products">Products</button>
+      <button class="admin-tab" id="tab-customers">Customers &amp; Payments</button>
     </div>
 
     <!-- ============ ORDERS TAB ============ -->
@@ -72,6 +73,7 @@
               <th>Total</th>
               <th>Status</th>
               <th></th>
+              <th></th>
             </tr>
           </thead>
           <tbody id="orders-tbody"></tbody>
@@ -89,6 +91,11 @@
         </div>
         <button class="btn-primary" id="show-add-form">+ Add product</button>
       </div>
+
+      <div class="lookup-form" style="max-width:480px;">
+        <input type="text" id="product-search" placeholder="Search by name, brand, or category…" />
+      </div>
+      <p class="page-sub" id="product-search-count" style="margin:-14px 0 20px;"></p>
 
       <div id="import-banner" class="import-banner" hidden>
         <span>Haven't moved your rate list here yet?</span>
@@ -114,12 +121,24 @@
               <select id="pf-category" required></select>
             </div>
             <div>
-              <label for="pf-unit">Unit </label>
+              <label for="pf-unit">Sold per</label>
               <input type="text" id="pf-unit" placeholder="piece, meter, box…" required />
             </div>
             <div>
-              <label for="pf-price">Price (₹) — leave blank for "Contact for price"</label>
+              <label for="pf-price">Selling price (₹) — leave blank for "Contact for price"</label>
               <input type="number" id="pf-price" min="0" step="1" />
+            </div>
+            <div>
+              <label for="pf-mrp">MRP (₹, optional)</label>
+              <input type="number" id="pf-mrp" min="0" step="1" />
+            </div>
+            <div>
+              <label for="pf-sku">SKU / Product code (optional)</label>
+              <input type="text" id="pf-sku" />
+            </div>
+            <div>
+              <label for="pf-stock">Stock / quantity available (optional)</label>
+              <input type="text" id="pf-stock" placeholder="e.g. 24, or 'In stock'" />
             </div>
             <div>
               <label for="pf-tag">Badge text (optional)</label>
@@ -127,12 +146,12 @@
             </div>
           </div>
 
-          <label for="pf-image">Product photo (optional)</label>
-          <input type="file" id="pf-image" accept="image/*" />
-          <div class="image-preview-row">
-            <img id="pf-image-preview" hidden />
-            <button type="button" class="text-link" id="pf-image-remove" hidden>Remove photo</button>
-          </div>
+          <label for="pf-description">Description (optional)</label>
+          <textarea id="pf-description" rows="3" placeholder="Full product description shown on the item page…"></textarea>
+
+          <label for="pf-image" style="margin-top:14px;">Product photos (optional, up to 4 — first one is the main image)</label>
+          <input type="file" id="pf-image" accept="image/*" multiple />
+          <div class="image-preview-row" id="pf-image-preview-row"></div>
 
           <div class="form-actions">
             <button type="submit" class="btn-primary" id="pf-submit">Save product</button>
@@ -159,14 +178,60 @@
       </div>
       <p class="state-message" id="products-empty" hidden>No products yet — add one above, or import the starter catalog.</p>
     </div>
+
+    <!-- ============ CUSTOMERS & PAYMENTS TAB ============ -->
+    <div id="customers-view" hidden>
+      <div class="admin-toolbar">
+        <div>
+          <h1 class="page-title" style="margin-bottom:4px;">Customers &amp; Payments</h1>
+          <p class="page-sub" style="margin-bottom:0;">Record payments, and see who's due, paid up, or in advance.</p>
+        </div>
+      </div>
+
+      <div class="summary-cards" id="summary-cards"></div>
+
+      <div class="lookup-form" style="max-width:480px;">
+        <input type="text" id="customer-search" placeholder="Search by name or phone…" />
+      </div>
+      <p class="page-sub" id="customer-search-count" style="margin:-14px 0 20px;"></p>
+
+      <div class="admin-table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Customer</th>
+              <th>Phone</th>
+              <th>Orders</th>
+              <th>Total Orders</th>
+              <th>Total Paid</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="customers-tbody"></tbody>
+        </table>
+      </div>
+      <p class="state-message" id="customers-empty" hidden>No customers yet — they'll show up here once orders come in.</p>
+    </div>
   </div>
 </main>
+
+<!-- ============ CUSTOMER DETAIL / PAYMENTS MODAL ============ -->
+<div class="overlay-scrim" id="customer-overlay" hidden></div>
+<div class="detail-panel customer-panel" id="customer-panel" role="dialog" aria-label="Customer payment details" hidden>
+  <button class="detail-close" id="customer-panel-close" aria-label="Close">✕</button>
+  <div class="detail-body" id="customer-panel-body"></div>
+</div>
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="firebase-config.js"></script>
+<script src="config.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="products.js"></script>
+<script src="logo-data.js"></script>
+<script src="pdf-builder.js"></script>
 <script>
 function formatPrice(price) {
   if (price === null || price === undefined) return "Contact for price";
@@ -178,7 +243,10 @@ const STATUSES = ["pending", "confirmed", "fulfilled", "cancelled"];
 /* ============================================================
    ORDERS TAB
    ============================================================ */
+let ordersCache = [];
+
 function renderOrdersTable(orders) {
+  ordersCache = orders;
   const tbody = document.getElementById("orders-tbody");
   const empty = document.getElementById("orders-empty");
   tbody.innerHTML = "";
@@ -206,6 +274,7 @@ function renderOrdersTable(orders) {
           ${STATUSES.map((s) => `<option value="${s}" ${s === order.status ? "selected" : ""}>${s.charAt(0).toUpperCase() + s.slice(1)}</option>`).join("")}
         </select>
       </td>
+      <td><button class="text-link" data-action="pdf" data-id="${order.orderNo}">PDF</button></td>
       <td><button class="admin-delete" data-id="${order.orderNo}">Delete</button></td>
     `;
     tbody.appendChild(tr);
@@ -219,13 +288,322 @@ async function loadOrders() {
 }
 
 /* ============================================================
+   CUSTOMERS & PAYMENTS
+   ============================================================ */
+const PAYMENT_METHODS = ["Cash", "UPI", "Bank Transfer", "Card", "Other"];
+let paymentsCache = [];
+let customersCache = []; // aggregated per-customer summaries, derived from ordersCache + paymentsCache
+let customerSearchQuery = "";
+let activeCustomerPhone = null; // phone of the customer currently open in the detail panel
+let editingPaymentId = null; // set while the Add Payment form is editing an existing payment
+
+function formatPriceSigned(n) {
+  return "₹" + Math.abs(n).toLocaleString("en-IN");
+}
+
+// Groups orders + payments by phone number into one summary per customer.
+// Cancelled orders don't count toward what a customer owes.
+function computeCustomerSummaries(orders, payments) {
+  const map = {};
+  orders.forEach((o) => {
+    const key = o.customerPhone || "(no phone)";
+    if (!map[key]) map[key] = { phone: key, name: o.customerName || "", totalOrders: 0, totalPaid: 0, orderCount: 0 };
+    if (o.status !== "cancelled") {
+      map[key].totalOrders += o.total || 0;
+      map[key].orderCount += 1;
+    }
+    if (o.customerName) map[key].name = o.customerName;
+  });
+  payments.forEach((p) => {
+    const key = p.customerPhone || "(no phone)";
+    if (!map[key]) map[key] = { phone: key, name: p.customerName || "", totalOrders: 0, totalPaid: 0, orderCount: 0 };
+    map[key].totalPaid += p.amount || 0;
+    if (p.customerName && !map[key].name) map[key].name = p.customerName;
+  });
+  return Object.values(map).map((c) => {
+    const balance = c.totalOrders - c.totalPaid;
+    return {
+      ...c,
+      due: balance > 0 ? balance : 0,
+      advance: balance < 0 ? -balance : 0,
+      status: balance > 0 ? "due" : balance < 0 ? "advance" : "paid",
+    };
+  });
+}
+
+function statusBadgeHtml(c) {
+  if (c.status === "due") return `<span class="pay-badge pay-badge-due">Due: ${formatPriceSigned(c.due)}</span>`;
+  if (c.status === "advance") return `<span class="pay-badge pay-badge-advance">Advance: ${formatPriceSigned(c.advance)}</span>`;
+  return `<span class="pay-badge pay-badge-paid">Paid in Full</span>`;
+}
+
+function renderSummaryCards() {
+  const totalSales = customersCache.reduce((s, c) => s + c.totalOrders, 0);
+  const totalPaid = customersCache.reduce((s, c) => s + c.totalPaid, 0);
+  const totalDue = customersCache.reduce((s, c) => s + c.due, 0);
+  const totalAdvance = customersCache.reduce((s, c) => s + c.advance, 0);
+  const dueCount = customersCache.filter((c) => c.status === "due").length;
+  const advanceCount = customersCache.filter((c) => c.status === "advance").length;
+
+  const cards = [
+    { label: "Total Sales", value: formatPriceSigned(totalSales), cls: "" },
+    { label: "Total Payments Received", value: formatPriceSigned(totalPaid), cls: "" },
+    { label: "Total Outstanding / Due", value: formatPriceSigned(totalDue), cls: "summary-card-due" },
+    { label: "Total Advance", value: formatPriceSigned(totalAdvance), cls: "summary-card-advance" },
+    { label: "Customers With Due", value: String(dueCount), cls: "summary-card-due" },
+    { label: "Customers With Advance", value: String(advanceCount), cls: "summary-card-advance" },
+  ];
+
+  document.getElementById("summary-cards").innerHTML = cards
+    .map(
+      (c) => `
+      <div class="summary-card ${c.cls}">
+        <p class="summary-card-label">${c.label}</p>
+        <p class="summary-card-value">${c.value}</p>
+      </div>`
+    )
+    .join("");
+}
+
+function getFilteredCustomers() {
+  const q = customerSearchQuery.trim().toLowerCase();
+  if (!q) return customersCache;
+  return customersCache.filter(
+    (c) => (c.name && c.name.toLowerCase().includes(q)) || (c.phone && c.phone.toLowerCase().includes(q))
+  );
+}
+
+function renderCustomersTable() {
+  const list = getFilteredCustomers();
+  const tbody = document.getElementById("customers-tbody");
+  const empty = document.getElementById("customers-empty");
+  tbody.innerHTML = "";
+
+  if (list.length === 0) {
+    empty.hidden = false;
+  } else {
+    empty.hidden = true;
+    list.forEach((c) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td><strong>${c.name || "—"}</strong></td>
+        <td>${c.phone}</td>
+        <td>${c.orderCount}</td>
+        <td>${formatPriceSigned(c.totalOrders)}</td>
+        <td>${formatPriceSigned(c.totalPaid)}</td>
+        <td>${statusBadgeHtml(c)}</td>
+        <td><button class="text-link" data-action="open-customer" data-phone="${c.phone}">View / Record payment</button></td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  const countEl = document.getElementById("customer-search-count");
+  countEl.textContent = customerSearchQuery.trim()
+    ? `Showing ${list.length} of ${customersCache.length} customers`
+    : `${customersCache.length} customers total`;
+}
+
+async function loadCustomersTabData() {
+  const [ordersSnap, paymentsSnap] = await Promise.all([
+    db.collection("orders").get(),
+    db.collection("payments").orderBy("createdAt", "desc").get(),
+  ]);
+  ordersCache = ordersSnap.docs.map((d) => d.data());
+  paymentsCache = paymentsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  customersCache = computeCustomerSummaries(ordersCache, paymentsCache);
+  renderSummaryCards();
+  renderCustomersTable();
+}
+
+function getCustomerByPhone(phone) {
+  return customersCache.find((c) => c.phone === phone);
+}
+
+function resetPaymentForm() {
+  const form = document.getElementById("payment-form");
+  if (form) form.reset();
+  editingPaymentId = null;
+  const submitBtn = document.getElementById("payment-submit");
+  if (submitBtn) submitBtn.textContent = "Record payment";
+  const cancelBtn = document.getElementById("payment-edit-cancel");
+  if (cancelBtn) cancelBtn.hidden = true;
+}
+
+function renderCustomerPanel(phone) {
+  const c = getCustomerByPhone(phone);
+  const body = document.getElementById("customer-panel-body");
+  if (!c) {
+    body.innerHTML = `<p class="state-message">Customer not found.</p>`;
+    return;
+  }
+
+  const customerOrders = ordersCache
+    .filter((o) => o.customerPhone === phone)
+    .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+  const customerPayments = paymentsCache.filter((p) => p.customerPhone === phone);
+
+  const ordersHtml = customerOrders.length
+    ? customerOrders
+        .slice(0, 10)
+        .map((o) => {
+          const d = o.createdAt && o.createdAt.toDate ? o.createdAt.toDate() : null;
+          return `<div class="mini-row"><span>${o.orderNo} · ${d ? d.toLocaleDateString("en-IN") : "—"}</span><span>${formatPriceSigned(o.total || 0)} · ${o.status}</span></div>`;
+        })
+        .join("")
+    : `<p class="state-message" style="padding:8px 0;">No orders yet.</p>`;
+
+  const paymentsHtml = customerPayments.length
+    ? `<div class="admin-table-wrap">
+        <table class="admin-table">
+          <thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Ref</th><th>Note</th><th>Recorded By</th><th></th></tr></thead>
+          <tbody>
+            ${customerPayments
+              .map((p) => {
+                const d = p.createdAt && p.createdAt.toDate ? p.createdAt.toDate() : null;
+                return `<tr>
+                  <td>${d ? d.toLocaleDateString("en-IN") : "—"}</td>
+                  <td>${formatPriceSigned(p.amount || 0)}</td>
+                  <td>${p.method || "—"}</td>
+                  <td>${p.refNumber || "—"}</td>
+                  <td>${p.note || "—"}</td>
+                  <td>${p.recordedBy || "—"}</td>
+                  <td>
+                    <button class="text-link" data-action="edit-payment" data-id="${p.id}">Edit</button>
+                    &nbsp;·&nbsp;
+                    <button class="admin-delete" data-action="delete-payment" data-id="${p.id}">Delete</button>
+                  </td>
+                </tr>`;
+              })
+              .join("")}
+          </tbody>
+        </table>
+      </div>`
+    : `<p class="state-message" style="padding:8px 0;">No payments recorded yet.</p>`;
+
+  body.innerHTML = `
+    <h2 class="form-title" style="margin-top:8px;">${c.name || "—"}</h2>
+    <p class="page-sub" style="margin-top:-8px;">${c.phone}</p>
+
+    <div class="customer-summary-row">
+      <div><span>Total Orders</span><strong>${formatPriceSigned(c.totalOrders)}</strong></div>
+      <div><span>Total Paid</span><strong>${formatPriceSigned(c.totalPaid)}</strong></div>
+      <div>${statusBadgeHtml(c)}</div>
+    </div>
+
+    <h3 class="form-title" style="font-size:14px;">Record a payment</h3>
+    <form id="payment-form">
+      <input type="hidden" id="pay-id" />
+      <div class="form-grid">
+        <div>
+          <label for="pay-amount">Amount (₹)</label>
+          <input type="number" id="pay-amount" min="0.01" step="0.01" required />
+        </div>
+        <div>
+          <label for="pay-method">Payment method</label>
+          <select id="pay-method">${PAYMENT_METHODS.map((m) => `<option value="${m}">${m}</option>`).join("")}</select>
+        </div>
+        <div>
+          <label for="pay-ref">Reference / transaction no. (optional)</label>
+          <input type="text" id="pay-ref" />
+        </div>
+        <div>
+          <label for="pay-note">Note (optional)</label>
+          <input type="text" id="pay-note" />
+        </div>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn-primary" id="payment-submit">Record payment</button>
+        <button type="button" class="btn-secondary" id="payment-edit-cancel" style="width:auto;margin-top:0;" hidden>Cancel edit</button>
+      </div>
+      <p class="state-message" id="payment-status" hidden></p>
+    </form>
+
+    <h3 class="form-title" style="font-size:14px;margin-top:22px;">Payment history</h3>
+    ${paymentsHtml}
+
+    <h3 class="form-title" style="font-size:14px;margin-top:22px;">Recent orders</h3>
+    <div class="mini-list">${ordersHtml}</div>
+  `;
+}
+
+function openCustomerPanel(phone) {
+  activeCustomerPhone = phone;
+  editingPaymentId = null;
+  renderCustomerPanel(phone);
+  const panel = document.getElementById("customer-panel");
+  const overlay = document.getElementById("customer-overlay");
+  panel.hidden = false;
+  overlay.hidden = false;
+  void panel.offsetWidth;
+  panel.classList.add("is-open");
+  overlay.classList.add("is-visible");
+  document.body.classList.add("modal-open");
+}
+
+function closeCustomerPanel() {
+  const panel = document.getElementById("customer-panel");
+  const overlay = document.getElementById("customer-overlay");
+  panel.classList.remove("is-open");
+  overlay.classList.remove("is-visible");
+  document.body.classList.remove("modal-open");
+  setTimeout(() => {
+    panel.hidden = true;
+    overlay.hidden = true;
+  }, 200);
+  activeCustomerPhone = null;
+  editingPaymentId = null;
+}
+
+async function refreshCustomerData() {
+  await loadCustomersTabData();
+  if (activeCustomerPhone) renderCustomerPanel(activeCustomerPhone);
+}
+
+// Regenerates a stored order's PDF (same layout as the one the customer
+// got) from the data saved in the database, and downloads it.
+function downloadOrderPdfFromAdmin(orderNo) {
+  const order = ordersCache.find((o) => o.orderNo === orderNo);
+  if (!order) {
+    alert("Couldn't find that order's data.");
+    return;
+  }
+  const items = (order.items || []).map((it) => ({
+    name: it.name,
+    brand: it.brand || "—",
+    qty: it.qty,
+    price: it.price,
+    lineTotal: it.price === null || it.price === undefined ? null : it.price * it.qty,
+  }));
+  const date = order.createdAt && order.createdAt.toDate ? order.createdAt.toDate() : new Date();
+
+  const result = renderOrderPDF({
+    orderNo: order.orderNo,
+    customerName: order.customerName,
+    customerPhone: order.customerPhone,
+    items,
+    total: order.total,
+    hasUnpriced: order.hasUnpriced,
+    date,
+  });
+  if (result) {
+    result.doc.save(result.filename);
+  }
+}
+
+/* ============================================================
    PRODUCTS TAB
    ============================================================ */
-let currentImageDataUrl = ""; // holds the (possibly resized) image for the form currently open
+let currentImages = []; // holds the (possibly resized) images for the form currently open
 
 function populateCategoryDropdown() {
   const select = document.getElementById("pf-category");
   select.innerHTML = CATEGORIES.map((c) => `<option value="${c.id}">${c.label}</option>`).join("");
+}
+
+function categoryLabel(id) {
+  const cat = CATEGORIES.find((c) => c.id === id);
+  return cat ? cat.label : id;
 }
 
 function renderProductsTable(products) {
@@ -245,7 +623,7 @@ function renderProductsTable(products) {
       <td>${p.image ? `<img src="${p.image}" class="admin-thumb" alt="${p.name}" />` : `<div class="admin-thumb admin-thumb-empty">${p.name.charAt(0)}</div>`}</td>
       <td><strong>${p.name}</strong>${p.tag ? `<br><span style="color:#8a9998;font-size:11px;">${p.tag}</span>` : ""}</td>
       <td>${p.brand}</td>
-      <td>${p.category}</td>
+      <td>${categoryLabel(p.category)}</td>
       <td>${formatPrice(p.price)}</td>
       <td>
         <button class="text-link" data-action="edit" data-id="${p.id}">Edit</button>
@@ -258,11 +636,37 @@ function renderProductsTable(products) {
 }
 
 let productsCache = [];
+let productSearchQuery = "";
+
+function getFilteredProducts() {
+  const q = productSearchQuery.trim().toLowerCase();
+  if (!q) return productsCache;
+  return productsCache.filter((p) => {
+    return (
+      (p.name && p.name.toLowerCase().includes(q)) ||
+      (p.brand && p.brand.toLowerCase().includes(q)) ||
+      (p.category && p.category.toLowerCase().includes(q)) ||
+      categoryLabel(p.category).toLowerCase().includes(q) ||
+      (p.tag && p.tag.toLowerCase().includes(q))
+    );
+  });
+}
+
+function renderFilteredProducts() {
+  const filtered = getFilteredProducts();
+  renderProductsTable(filtered);
+  const countEl = document.getElementById("product-search-count");
+  if (productSearchQuery.trim()) {
+    countEl.textContent = `Showing ${filtered.length} of ${productsCache.length} products`;
+  } else {
+    countEl.textContent = `${productsCache.length} products total`;
+  }
+}
 
 async function loadProducts() {
   const snap = await db.collection("products").orderBy("name").get();
   productsCache = snap.docs.map((d) => d.data());
-  renderProductsTable(productsCache);
+  renderFilteredProducts();
   document.getElementById("import-banner").hidden = productsCache.length > 0;
 }
 
@@ -304,9 +708,8 @@ function resetProductForm() {
   document.getElementById("pf-doc-id").value = "";
   document.getElementById("form-title").textContent = "Add product";
   document.getElementById("pf-submit").textContent = "Save product";
-  currentImageDataUrl = "";
-  document.getElementById("pf-image-preview").hidden = true;
-  document.getElementById("pf-image-remove").hidden = true;
+  currentImages = [];
+  renderImagePreviews();
   document.getElementById("pf-status").hidden = true;
 }
 
@@ -320,6 +723,21 @@ function closeProductForm() {
   resetProductForm();
 }
 
+// Renders the current set of (already resized) images as removable
+// thumbnails above the file input.
+function renderImagePreviews() {
+  const row = document.getElementById("pf-image-preview-row");
+  row.innerHTML = currentImages
+    .map(
+      (img, i) => `
+        <div class="pf-thumb-wrap">
+          <img src="${img}" class="pf-thumb-img" alt="" />
+          <button type="button" class="pf-thumb-remove" data-index="${i}" aria-label="Remove photo">✕</button>
+        </div>`
+    )
+    .join("");
+}
+
 function fillFormForEdit(product) {
   resetProductForm();
   document.getElementById("form-title").textContent = "Edit product";
@@ -330,14 +748,13 @@ function fillFormForEdit(product) {
   document.getElementById("pf-category").value = product.category || "";
   document.getElementById("pf-unit").value = product.unit || "";
   document.getElementById("pf-price").value = product.price === null || product.price === undefined ? "" : product.price;
+  document.getElementById("pf-mrp").value = product.mrp === null || product.mrp === undefined ? "" : product.mrp;
+  document.getElementById("pf-sku").value = product.sku || "";
+  document.getElementById("pf-stock").value = product.stock === null || product.stock === undefined ? "" : product.stock;
   document.getElementById("pf-tag").value = product.tag || "";
-  if (product.image) {
-    currentImageDataUrl = product.image;
-    const preview = document.getElementById("pf-image-preview");
-    preview.src = product.image;
-    preview.hidden = false;
-    document.getElementById("pf-image-remove").hidden = false;
-  }
+  document.getElementById("pf-description").value = product.description || "";
+  currentImages = product.images && product.images.length ? product.images.slice() : product.image ? [product.image] : [];
+  renderImagePreviews();
   openProductForm();
 }
 
@@ -354,8 +771,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const adminView = document.getElementById("admin-view");
   const ordersView = document.getElementById("orders-view");
   const productsView = document.getElementById("products-view");
+  const customersView = document.getElementById("customers-view");
   const tabOrders = document.getElementById("tab-orders");
   const tabProducts = document.getElementById("tab-products");
+  const tabCustomers = document.getElementById("tab-customers");
   const logoutBtn = document.getElementById("logout-btn");
 
   auth.onAuthStateChanged((user) => {
@@ -389,17 +808,17 @@ document.addEventListener("DOMContentLoaded", () => {
   logoutBtn.addEventListener("click", () => auth.signOut());
 
   // ---- Tab switching ----
-  tabOrders.addEventListener("click", () => {
-    tabOrders.classList.add("is-active");
-    tabProducts.classList.remove("is-active");
-    ordersView.hidden = false;
-    productsView.hidden = true;
-  });
-  tabProducts.addEventListener("click", () => {
-    tabProducts.classList.add("is-active");
-    tabOrders.classList.remove("is-active");
-    productsView.hidden = false;
-    ordersView.hidden = true;
+  function setActiveTab(tab) {
+    [tabOrders, tabProducts, tabCustomers].forEach((t) => t.classList.remove("is-active"));
+    [ordersView, productsView, customersView].forEach((v) => (v.hidden = true));
+    tab.el.classList.add("is-active");
+    tab.view.hidden = false;
+  }
+  tabOrders.addEventListener("click", () => setActiveTab({ el: tabOrders, view: ordersView }));
+  tabProducts.addEventListener("click", () => setActiveTab({ el: tabProducts, view: productsView }));
+  tabCustomers.addEventListener("click", () => {
+    setActiveTab({ el: tabCustomers, view: customersView });
+    loadCustomersTabData();
   });
 
   // ---- Orders: status change / delete (event delegation) ----
@@ -415,6 +834,11 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   document.getElementById("orders-tbody").addEventListener("click", async (e) => {
+    const pdfBtn = e.target.closest('[data-action="pdf"]');
+    if (pdfBtn) {
+      downloadOrderPdfFromAdmin(pdfBtn.dataset.id);
+      return;
+    }
     const btn = e.target.closest(".admin-delete");
     if (!btn) return;
     const orderNo = btn.dataset.id;
@@ -434,27 +858,33 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   document.getElementById("pf-cancel").addEventListener("click", closeProductForm);
 
-  // ---- Products: image select + preview (resized client-side) ----
+  // ---- Products: search/filter ----
+  document.getElementById("product-search").addEventListener("input", (e) => {
+    productSearchQuery = e.target.value;
+    renderFilteredProducts();
+  });
+
+  // ---- Products: image select + preview (resized client-side, up to 4 photos) ----
   document.getElementById("pf-image").addEventListener("change", async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+    const files = Array.from(e.target.files || []).slice(0, 4 - currentImages.length);
+    if (files.length === 0) return;
     try {
-      const dataUrl = await resizeImageFile(file);
-      currentImageDataUrl = dataUrl;
-      const preview = document.getElementById("pf-image-preview");
-      preview.src = dataUrl;
-      preview.hidden = false;
-      document.getElementById("pf-image-remove").hidden = false;
+      const resized = await Promise.all(files.map((f) => resizeImageFile(f)));
+      currentImages = currentImages.concat(resized).slice(0, 4);
+      renderImagePreviews();
     } catch (err) {
-      alert("Could not process that image. Please try a different file.");
+      alert("Could not process one of those images. Please try different files.");
+    } finally {
+      e.target.value = "";
     }
   });
 
-  document.getElementById("pf-image-remove").addEventListener("click", () => {
-    currentImageDataUrl = "";
-    document.getElementById("pf-image").value = "";
-    document.getElementById("pf-image-preview").hidden = true;
-    document.getElementById("pf-image-remove").hidden = true;
+  // Remove a single photo (event delegation over the dynamically rendered thumbnails)
+  document.getElementById("pf-image-preview-row").addEventListener("click", (e) => {
+    const btn = e.target.closest(".pf-thumb-remove");
+    if (!btn) return;
+    currentImages.splice(Number(btn.dataset.index), 1);
+    renderImagePreviews();
   });
 
   // ---- Products: save (add or update) ----
@@ -465,6 +895,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const existingId = document.getElementById("pf-doc-id").value;
     const priceRaw = document.getElementById("pf-price").value;
+    const mrpRaw = document.getElementById("pf-mrp").value;
 
     const data = {
       name: document.getElementById("pf-name").value.trim(),
@@ -472,8 +903,13 @@ document.addEventListener("DOMContentLoaded", () => {
       category: document.getElementById("pf-category").value,
       unit: document.getElementById("pf-unit").value.trim(),
       price: priceRaw === "" ? null : Number(priceRaw),
+      mrp: mrpRaw === "" ? null : Number(mrpRaw),
+      sku: document.getElementById("pf-sku").value.trim(),
+      stock: document.getElementById("pf-stock").value.trim(),
       tag: document.getElementById("pf-tag").value.trim(),
-      image: currentImageDataUrl || "",
+      description: document.getElementById("pf-description").value.trim(),
+      images: currentImages,
+      image: currentImages[0] || "", // kept for backward compatibility with existing card/thumbnail rendering
     };
 
     try {
@@ -534,6 +970,99 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch (err) {
       btn.textContent = originalText;
       alert("Import failed: " + err.message);
+    }
+  });
+
+  // ---- Customers: search ----
+  document.getElementById("customer-search").addEventListener("input", (e) => {
+    customerSearchQuery = e.target.value;
+    renderCustomersTable();
+  });
+
+  // ---- Customers: open detail panel from the table ----
+  document.getElementById("customers-tbody").addEventListener("click", (e) => {
+    const btn = e.target.closest('[data-action="open-customer"]');
+    if (!btn) return;
+    openCustomerPanel(btn.dataset.phone);
+  });
+
+  // ---- Customer panel: close ----
+  document.getElementById("customer-panel-close").addEventListener("click", closeCustomerPanel);
+  document.getElementById("customer-overlay").addEventListener("click", closeCustomerPanel);
+
+  // ---- Payment form: submit (add or, if editing, update) — event delegation
+  // since the form is re-rendered fresh each time the customer panel opens ----
+  document.getElementById("customer-panel-body").addEventListener("submit", async (e) => {
+    if (e.target.id !== "payment-form") return;
+    e.preventDefault();
+    if (!activeCustomerPhone) return;
+
+    const statusEl = document.getElementById("payment-status");
+    statusEl.hidden = true;
+    const amount = Number(document.getElementById("pay-amount").value);
+    if (!amount || amount <= 0) {
+      statusEl.textContent = "Enter a valid payment amount.";
+      statusEl.hidden = false;
+      return;
+    }
+
+    const customer = getCustomerByPhone(activeCustomerPhone);
+    const data = {
+      customerPhone: activeCustomerPhone,
+      customerName: (customer && customer.name) || "",
+      amount,
+      method: document.getElementById("pay-method").value,
+      refNumber: document.getElementById("pay-ref").value.trim(),
+      note: document.getElementById("pay-note").value.trim(),
+      recordedBy: (auth.currentUser && auth.currentUser.email) || "admin",
+    };
+
+    try {
+      if (editingPaymentId) {
+        await db.collection("payments").doc(editingPaymentId).update(data);
+      } else {
+        data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+        await db.collection("payments").add(data);
+      }
+      await refreshCustomerData();
+    } catch (err) {
+      statusEl.textContent = "Could not save payment: " + err.message;
+      statusEl.hidden = false;
+    }
+  });
+
+  // ---- Payment history: edit / delete (event delegation) ----
+  document.getElementById("customer-panel-body").addEventListener("click", async (e) => {
+    const cancelBtn = e.target.closest("#payment-edit-cancel");
+    if (cancelBtn) {
+      resetPaymentForm();
+      return;
+    }
+
+    const editBtn = e.target.closest('[data-action="edit-payment"]');
+    if (editBtn) {
+      const payment = paymentsCache.find((p) => p.id === editBtn.dataset.id);
+      if (!payment) return;
+      editingPaymentId = payment.id;
+      document.getElementById("pay-amount").value = payment.amount || "";
+      document.getElementById("pay-method").value = payment.method || "Cash";
+      document.getElementById("pay-ref").value = payment.refNumber || "";
+      document.getElementById("pay-note").value = payment.note || "";
+      document.getElementById("payment-submit").textContent = "Update payment";
+      document.getElementById("payment-edit-cancel").hidden = false;
+      document.getElementById("payment-form").scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
+
+    const deleteBtn = e.target.closest('[data-action="delete-payment"]');
+    if (deleteBtn) {
+      if (!confirm("Delete this payment? The customer's due/advance balance will be recalculated.")) return;
+      try {
+        await db.collection("payments").doc(deleteBtn.dataset.id).delete();
+        await refreshCustomerData();
+      } catch (err) {
+        alert("Could not delete payment: " + err.message);
+      }
     }
   });
 });

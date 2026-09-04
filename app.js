@@ -1,13 +1,5 @@
-/* ============================================================
-   SITE CONFIG — edit these two lines when things change
-   ============================================================ */
-const CONFIG = {
-  // Shop's WhatsApp number, country code first, digits only.
-  // Example for India: 91 followed by the 10-digit number.
-  whatsappNumber: "918210063770",
-  shopName: "Baba Electronics & Electricals",
-  shopAddress: "Panna Market, Siwan, Bihar – 841226",
-};
+/* CONFIG now lives in config.js (shared with admin.html) — loaded via a
+   <script src="config.js"> tag before this file. */
 
 /* ============================================================
    STATE
@@ -17,6 +9,7 @@ let searchQuery = "";
 let cart = loadCart(); // { productId: quantity }
 let pendingQty = {}; // { productId: quantity chosen on the card, before "Add to cart" }
 let PRODUCTS = []; // populated by loadProductCatalog() before first render
+let currentDetailProductId = null; // product currently shown in the detail modal, if any
 
 /* ============================================================
    PRODUCT CATALOG — loaded from the database if it's set up,
@@ -46,18 +39,15 @@ function formatPrice(price) {
   return "₹" + price.toLocaleString("en-IN");
 }
 
-// PDF-only price formatter. jsPDF's built-in "helvetica" font only supports
-// the standard WinAnsi character set, which does not include the ₹ (Rupee)
-// glyph — using formatPrice()'s ₹ inside the PDF renders as a stray garbled
-// character instead of the symbol. "Rs." is plain ASCII and always renders
-// correctly without needing to embed a custom Unicode font.
-function formatPriceForPDF(price) {
-  if (price === null || price === undefined) return "Contact for price";
-  return "Rs. " + price.toLocaleString("en-IN");
-}
+// formatPriceForPDF() now lives in pdf-builder.js (shared with admin.html).
 
 function findProduct(id) {
   return PRODUCTS.find((p) => p.id === id);
+}
+
+function categoryLabelFor(id) {
+  const cat = CATEGORIES.find((c) => c.id === id);
+  return cat ? cat.label : id;
 }
 
 function loadCart() {
@@ -115,7 +105,7 @@ function renderProducts() {
     const card = document.createElement("div");
     card.className = "product-card";
     card.innerHTML = `
-      <div class="product-image" aria-hidden="true">
+      <div class="product-image" data-action="view" data-id="${p.id}" aria-hidden="true">
         ${
           p.image
             ? `<img src="${p.image}" alt="${p.name}" class="product-photo" />`
@@ -124,8 +114,10 @@ function renderProducts() {
         ${p.tag ? `<span class="product-badge">${p.tag}</span>` : ""}
       </div>
       <div class="product-body">
-        <p class="product-brand">${p.brand}</p>
-        <h3 class="product-name">${p.name}</h3>
+        <div class="product-clickable" data-action="view" data-id="${p.id}">
+          <p class="product-brand">${p.brand}</p>
+          <h3 class="product-name">${p.name}</h3>
+        </div>
         <p class="product-unit">per ${p.unit}</p>
         <div class="product-footer">
           <span class="product-price">${formatPrice(p.price)}</span>
@@ -163,6 +155,121 @@ function renderCategories() {
 }
 
 /* ============================================================
+   PRODUCT DETAIL MODAL
+   ============================================================ */
+function openProductDetail(id) {
+  const p = findProduct(id);
+  if (!p) return;
+  currentDetailProductId = id;
+  renderProductDetail(p);
+
+  const panel = document.getElementById("detail-panel");
+  const overlay = document.getElementById("detail-overlay");
+  panel.hidden = false;
+  overlay.hidden = false;
+  // Force reflow so the "is-open"/"is-visible" transition actually plays.
+  void panel.offsetWidth;
+  panel.classList.add("is-open");
+  overlay.classList.add("is-visible");
+  document.body.classList.add("modal-open");
+}
+
+function closeProductDetail() {
+  const panel = document.getElementById("detail-panel");
+  const overlay = document.getElementById("detail-overlay");
+  panel.classList.remove("is-open");
+  overlay.classList.remove("is-visible");
+  document.body.classList.remove("modal-open");
+  setTimeout(() => {
+    panel.hidden = true;
+    overlay.hidden = true;
+  }, 200);
+  currentDetailProductId = null;
+}
+
+function renderProductDetail(p) {
+  const body = document.getElementById("detail-body");
+  const qty = pendingQty[p.id] || 1;
+
+  const images = p.images && p.images.length ? p.images : p.image ? [p.image] : [];
+  const galleryHtml = images.length
+    ? `<div class="detail-gallery">
+         <div class="detail-main-image"><img src="${images[0]}" alt="${p.name}" id="detail-main-img" /></div>
+         ${
+           images.length > 1
+             ? `<div class="detail-thumbs">${images
+                 .map(
+                   (img, i) =>
+                     `<button class="detail-thumb${i === 0 ? " is-active" : ""}" data-img="${img}"><img src="${img}" alt="" /></button>`
+                 )
+                 .join("")}</div>`
+             : ""
+         }
+       </div>`
+    : `<div class="detail-main-image detail-placeholder"><span>${p.name.charAt(0)}</span></div>`;
+
+  const showMrp = p.mrp && p.price !== null && p.mrp > p.price;
+  const priceRow = `
+    <div class="detail-price-row">
+      <span class="detail-price">${formatPrice(p.price)}</span>
+      ${showMrp ? `<span class="detail-mrp">₹${Number(p.mrp).toLocaleString("en-IN")}</span>` : ""}
+    </div>`;
+
+  const metaRows = [];
+  if (p.sku) metaRows.push(`<div class="detail-meta-row"><span>SKU / Code</span><span>${p.sku}</span></div>`);
+  metaRows.push(`<div class="detail-meta-row"><span>Brand</span><span>${p.brand}</span></div>`);
+  metaRows.push(`<div class="detail-meta-row"><span>Category</span><span>${categoryLabelFor(p.category)}</span></div>`);
+  metaRows.push(`<div class="detail-meta-row"><span>Unit</span><span>${p.unit}</span></div>`);
+  if (p.stock !== undefined && p.stock !== null && p.stock !== "") {
+    metaRows.push(`<div class="detail-meta-row"><span>In stock</span><span>${p.stock}</span></div>`);
+  }
+
+  body.innerHTML = `
+    ${galleryHtml}
+    <div class="detail-info">
+      <p class="detail-brand">${p.brand}${p.tag ? ` · ${p.tag}` : ""}</p>
+      <h2 class="detail-name">${p.name}</h2>
+      ${priceRow}
+      ${p.description ? `<p class="detail-description">${p.description}</p>` : ""}
+      <div class="detail-meta">${metaRows.join("")}</div>
+      <div class="detail-actions">
+        <div class="qty-stepper">
+          <button data-action="detail-qty-dec" aria-label="Fewer">−</button>
+          <span class="qty-value">${qty}</span>
+          <button data-action="detail-qty-inc" aria-label="More">+</button>
+        </div>
+        <button class="btn-order btn-order-full" data-action="detail-add" data-id="${p.id}">Add ${qty} to cart</button>
+      </div>
+    </div>
+  `;
+}
+
+/* ============================================================
+   TOAST — brief, non-blocking confirmation (~1s), never stacks
+   ============================================================ */
+let toastHideTimer = null;
+let toastRemoveTimer = null;
+function showToast(message) {
+  const toast = document.getElementById("toast");
+  if (!toast) return;
+  clearTimeout(toastHideTimer);
+  clearTimeout(toastRemoveTimer);
+  toast.textContent = message;
+  toast.hidden = false;
+  // Restart the animation even if a toast is already showing (re-triggering
+  // instead of stacking a second one).
+  toast.classList.remove("is-visible");
+  void toast.offsetWidth;
+  toast.classList.add("is-visible");
+  toastHideTimer = setTimeout(() => {
+    toast.classList.remove("is-visible");
+    toastRemoveTimer = setTimeout(() => {
+      toast.hidden = true;
+    }, 200);
+  }, 1000);
+}
+
+/* ============================================================
    CART
    ============================================================ */
 function addToCart(id, qty = 1) {
@@ -171,6 +278,7 @@ function addToCart(id, qty = 1) {
   renderCartBadge();
   renderCartPanel();
   flashCartIcon();
+  showToast("✓ Product added to cart");
 }
 
 function removeFromCart(id) {
@@ -266,45 +374,10 @@ function flashCartIcon() {
 /* ============================================================
    ORDER — PDF shared straight to WhatsApp, with a manual fallback
    ============================================================ */
-// Turns a rupee amount into words, Indian numbering (lakh/crore), e.g.
-// 37149 -> "Thirty Seven Thousand One Hundred and Forty Nine Rupees only"
-function amountInWords(amount) {
-  const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten",
-    "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
-  const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+// amountInWords, formatPriceForPDF, sanitizeFilenamePart, buildOrderFilename,
+// and the PDF rendering itself now live in pdf-builder.js (shared with
+// admin.html, so a regenerated order PDF looks identical to the original).
 
-  function twoDigits(n) {
-    if (n < 20) return ones[n];
-    return tens[Math.floor(n / 10)] + (n % 10 ? " " + ones[n % 10] : "");
-  }
-  function threeDigits(n) {
-    if (n < 100) return twoDigits(n);
-    return ones[Math.floor(n / 100)] + " Hundred" + (n % 100 ? " and " + twoDigits(n % 100) : "");
-  }
-
-  let n = Math.round(amount);
-  if (n === 0) return "Zero Rupees only";
-
-  const crore = Math.floor(n / 10000000);
-  n %= 10000000;
-  const lakh = Math.floor(n / 100000);
-  n %= 100000;
-  const thousand = Math.floor(n / 1000);
-  n %= 1000;
-  const hundred = n;
-
-  let parts = [];
-  if (crore) parts.push(threeDigits(crore) + " Crore");
-  if (lakh) parts.push(threeDigits(lakh) + " Lakh");
-  if (thousand) parts.push(threeDigits(thousand) + " Thousand");
-  if (hundred) parts.push(threeDigits(hundred));
-
-  return parts.join(" ") + " Rupees only";
-}
-
-// Gets the next order number from a shared counter in Firestore, so numbers
-// are short and sequential like a real receipt book (e.g. 3756, 3757 ...).
-// Falls back to a timestamp-based number if Firebase isn't set up yet.
 async function generateOrderNumber() {
   if (!isFirebaseReady()) {
     const now = new Date();
@@ -375,27 +448,10 @@ async function saveOrderToFirestore(orderNo, customerName, customerPhone, total,
 // Turns a name/order-no into a safe filename fragment: trims, swaps
 // whitespace for underscores, and strips characters that aren't safe
 // in filenames across OSes.
-function sanitizeFilenamePart(str) {
-  return String(str || "")
-    .trim()
-    .replace(/\s+/g, "_")
-    .replace(/[^a-zA-Z0-9_\-]/g, "");
-}
 
-// Builds "CustomerName_BillNo_DD-MM-YYYY.pdf", e.g.
-// "Hareram_Tiwari_3005_01-09-2026.pdf".
-function buildOrderFilename(customerName, orderNo, date) {
-  const namePart = sanitizeFilenamePart(customerName) || "Customer";
-  const billPart = sanitizeFilenamePart(orderNo) || "Order";
-  const dd = String(date.getDate()).padStart(2, "0");
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const yyyy = date.getFullYear();
-  return `${namePart}_${billPart}_${dd}-${mm}-${yyyy}.pdf`;
-}
-
-// Builds the order PDF in a compact, print-friendly A4 layout designed to
-// fit at least 32 product rows on a single page. Returns
-// { doc, orderNo, total, hasUnpriced, filename } without saving the file.
+// Assembles a new order from the live cart (items, totals, a fresh
+// sequential order number) and hands it to the shared PDF renderer.
+// Returns { doc, orderNo, total, hasUnpriced, filename }.
 async function buildOrderPDF(customerName, customerPhone) {
   const ids = Object.keys(cart);
   if (ids.length === 0) return null;
@@ -405,49 +461,8 @@ async function buildOrderPDF(customerName, customerPhone) {
   }
 
   const orderNo = await generateOrderNumber();
-  const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({ unit: "mm", format: "a4" });
   const now = new Date();
 
-  // ---- Page geometry ----
-  const pageWidth = 210;
-  const pageHeight = 297;
-  const marginX = 12;
-  const marginTop = 10;
-  const marginBottom = 12;
-  const contentWidth = pageWidth - marginX * 2; // 186mm
-  const footerReserve = 5; // space kept clear above marginBottom for the footer
-  const maxItemY = pageHeight - marginBottom - footerReserve;
-
-  // ---- Table column geometry (S.No 7% / Desc 42% / Brand 15% / Qty 7% / Price 14% / Subtotal 15%) ----
-  const colW = {
-    sno: contentWidth * 0.07,
-    desc: contentWidth * 0.42,
-    brand: contentWidth * 0.15,
-    qty: contentWidth * 0.07,
-    price: contentWidth * 0.14,
-    subtotal: contentWidth * 0.15,
-  };
-  const colX = {};
-  let cx = marginX;
-  ["sno", "desc", "brand", "qty", "price", "subtotal"].forEach((key) => {
-    colX[key] = cx;
-    cx += colW[key];
-  });
-  const colBoundaries = [
-    marginX,
-    colX.desc,
-    colX.brand,
-    colX.qty,
-    colX.price,
-    colX.subtotal,
-    marginX + contentWidth,
-  ];
-
-  const rowHeight = 6; // mm, target compact row height (spec range: 6-7mm)
-  const headerRowHeight = 7.5;
-
-  // ---- Compute totals up front ----
   let total = 0;
   let hasUnpriced = false;
   const items = ids
@@ -462,264 +477,18 @@ async function buildOrderPDF(customerName, customerPhone) {
     })
     .filter(Boolean);
 
-  // ---- Compact page header (shop block + title) ----
-  // Full version on page 1 (~21mm incl. divider); a slimmer version repeats
-  // on continuation pages so item rows keep most of the vertical space.
-  function drawPageHeader(isFirstPage) {
-    let y = marginTop;
-    if (isFirstPage) {
-      const logoSize = 16; // mm, compact square — fits inside the ~17mm header block
-      let textX = marginX;
-      if (typeof LOGO_BASE64 !== "undefined" && LOGO_BASE64) {
-        try {
-          doc.addImage(LOGO_BASE64, "PNG", marginX, y, logoSize, logoSize);
-          textX = marginX + logoSize + 4;
-        } catch (err) {
-          console.error("Could not add logo to PDF:", err);
-        }
-      }
-
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(13);
-      doc.text(CONFIG.shopName, textX, y + 4);
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(8);
-      doc.text(CONFIG.shopAddress, textX, y + 8.5);
-      doc.text(`Phone: +${CONFIG.whatsappNumber.slice(0, 2)} ${CONFIG.whatsappNumber.slice(2)}`, textX, y + 12.5);
-
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(12);
-      doc.text("ORDER REQUEST", pageWidth - marginX, y + 6, { align: "right" });
-
-      y += 17;
-    } else {
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(10);
-      doc.text(CONFIG.shopName, marginX, y + 3);
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(8);
-      doc.text(`Order No: ${orderNo} (contd.)`, pageWidth - marginX, y + 3, { align: "right" });
-      y += 6;
-    }
-    doc.setDrawColor(180);
-    doc.setLineWidth(0.2);
-    doc.line(marginX, y, pageWidth - marginX, y);
-    return y + 4;
-  }
-
-  // ---- Compact customer/order info block (page 1 only, ~19mm) ----
-  function drawCustomerInfo(y) {
-    const boxH = 19;
-    const halfW = contentWidth / 2;
-    doc.setDrawColor(180);
-    doc.setLineWidth(0.2);
-    doc.rect(marginX, y, contentWidth, boxH);
-    doc.line(marginX + halfW, y, marginX + halfW, y + boxH);
-    const headRowH = 5.5;
-    doc.line(marginX, y + headRowH, marginX + contentWidth, y + headRowH);
-
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(8.5);
-    doc.text("Customer Information", marginX + 2, y + 3.9);
-    doc.text("Order Information", marginX + halfW + 2, y + 3.9);
-
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(8.3);
-    let ly = y + headRowH + 4.2;
-    doc.text(`Customer: ${customerName || "—"}`, marginX + 2, ly);
-    doc.text(`Bill/Order No.: ${orderNo}`, marginX + halfW + 2, ly);
-    ly += 4.2;
-    doc.text(`Contact: ${customerPhone || "—"}`, marginX + 2, ly);
-    doc.text(`Date: ${now.toLocaleDateString("en-IN")}`, marginX + halfW + 2, ly);
-    ly += 4.2;
-    doc.text(`Time: ${now.toLocaleTimeString("en-IN")}`, marginX + halfW + 2, ly);
-
-    return y + boxH + 4;
-  }
-
-  // ---- Product table header row (repeated on every page) ----
-  function drawTableHeader(y) {
-    doc.setFillColor(235, 235, 235);
-    doc.rect(marginX, y, contentWidth, headerRowHeight, "F");
-    doc.setDrawColor(150);
-    doc.setLineWidth(0.2);
-    doc.rect(marginX, y, contentWidth, headerRowHeight);
-    colBoundaries.forEach((x) => doc.line(x, y, x, y + headerRowHeight));
-
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(9);
-    const textY = y + headerRowHeight / 2 + 1.2;
-    doc.text("S.No.", colX.sno + colW.sno - 1.5, textY, { align: "right" });
-    doc.text("Product Description", colX.desc + 1.5, textY);
-    doc.text("Brand", colX.brand + 1.5, textY);
-    doc.text("Qty", colX.qty + colW.qty / 2, textY, { align: "center" });
-    doc.text("Unit Price", colX.price + colW.price - 1.5, textY, { align: "right" });
-    doc.text("Subtotal", colX.subtotal + colW.subtotal - 1.5, textY, { align: "right" });
-    return y + headerRowHeight;
-  }
-
-  // ---- Fit a (possibly long) product name into the description column ----
-  // Tries one line at the normal size, then a smaller size, then finally
-  // allows up to 2 lines with an ellipsis rather than overflowing the row
-  // or bleeding into the next column.
-  function fitDescription(text, maxWidth) {
-    let fontSize = 8.3;
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(fontSize);
-    let lines = doc.splitTextToSize(text, maxWidth);
-    if (lines.length <= 1) return { lines, fontSize };
-
-    fontSize = 7.3;
-    doc.setFontSize(fontSize);
-    lines = doc.splitTextToSize(text, maxWidth);
-    if (lines.length <= 1) return { lines, fontSize };
-
-    if (lines.length > 2) {
-      lines = lines.slice(0, 2);
-      let last = lines[1];
-      while (last.length > 1 && doc.getTextWidth(last + "…") > maxWidth) {
-        last = last.slice(0, -1);
-      }
-      lines[1] = last + "…";
-    }
-    return { lines, fontSize };
-  }
-
-  // ---- Draw one compact item row; returns the row's actual height used ----
-  function drawItemRow(y, item, sno) {
-    const { lines: descLines, fontSize: descFontSize } = fitDescription(item.name, colW.desc - 3);
-    const lineStepMm = descFontSize * 0.42;
-    const rowH = descLines.length > 1 ? Math.max(rowHeight, descLines.length * lineStepMm + 2.5) : rowHeight;
-
-    doc.setDrawColor(200);
-    doc.setLineWidth(0.15);
-    colBoundaries.forEach((x) => doc.line(x, y, x, y + rowH));
-    doc.line(marginX, y + rowH, marginX + contentWidth, y + rowH);
-
-    const midY = y + rowH / 2 + 1.2;
-
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(8.3);
-    doc.text(String(sno), colX.sno + colW.sno - 1.5, midY, { align: "right" });
-
-    doc.setFontSize(descFontSize);
-    if (descLines.length > 1) {
-      const blockH = descLines.length * lineStepMm;
-      let startY = y + rowH / 2 - blockH / 2 + lineStepMm * 0.75;
-      descLines.forEach((line, i) => doc.text(line, colX.desc + 1.5, startY + i * lineStepMm));
-    } else {
-      doc.text(descLines[0], colX.desc + 1.5, midY);
-    }
-
-    doc.setFontSize(8.3);
-    doc.text(item.brand, colX.brand + 1.5, midY);
-    doc.text(String(item.qty), colX.qty + colW.qty / 2, midY, { align: "center" });
-    doc.text(item.price === null ? "—" : formatPriceForPDF(item.price), colX.price + colW.price - 1.5, midY, { align: "right" });
-    doc.text(item.lineTotal === null ? "Quote" : formatPriceForPDF(item.lineTotal), colX.subtotal + colW.subtotal - 1.5, midY, {
-      align: "right",
-    });
-
-    return rowH;
-  }
-
-  // ---- Lay out page 1: header, customer info, table header, then rows ----
-  let y = drawPageHeader(true);
-  y = drawCustomerInfo(y);
-  y = drawTableHeader(y);
-
-  items.forEach((item, idx) => {
-    const projectedHeight = rowHeight; // conservative estimate for the page-break check
-    if (y + projectedHeight > maxItemY) {
-      doc.addPage();
-      y = drawPageHeader(false);
-      y = drawTableHeader(y);
-    }
-    y += drawItemRow(y, item, idx + 1);
+  const result = renderOrderPDF({
+    orderNo,
+    customerName,
+    customerPhone,
+    items,
+    total,
+    hasUnpriced,
+    date: now,
   });
+  if (!result) return null;
 
-  // ---- Reserve space for totals / words / disclaimer / signatures ----
-  // Kept intentionally tight (~28mm) so that an order with exactly 32 short
-  // item rows still has a realistic chance of finishing on page 1, per the
-  // "single A4 page for 32 items" preference — while the ≥32-rows-per-page
-  // requirement above is met unconditionally regardless of this block.
-  const totalsBlockHeight = 5;
-  const wordsBlockHeight = total > 0 ? 5 : 0;
-  const disclaimerHeight = 7;
-  const signatureHeight = 6;
-  const bottomBlockHeight = totalsBlockHeight + wordsBlockHeight + disclaimerHeight + signatureHeight;
-
-  if (y + bottomBlockHeight > maxItemY) {
-    doc.addPage();
-    y = drawPageHeader(false);
-    y += 4;
-  } else {
-    y += 4;
-  }
-
-  // ---- Totals (single combined text block — label and amount together,
-  // not split into two separately-aligned pieces) ----
-  const halfW = contentWidth / 2;
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(11);
-  const totalText = `Estimated Total: ${formatPriceForPDF(total)}${hasUnpriced ? " + quote" : ""}`;
-  doc.text(totalText, marginX + contentWidth, y, { align: "right" });
-  y += 6;
-
-  // ---- Amount in words (compact, wraps only if genuinely needed) ----
-  if (total > 0) {
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(8);
-    doc.text("Amount in Words:", marginX, y);
-    doc.setFont("helvetica", "normal");
-    const labelWidth = doc.getTextWidth("Amount in Words: ") + 1.5;
-    const wordsLines = doc.splitTextToSize(amountInWords(total), contentWidth - labelWidth);
-    doc.text(wordsLines[0], marginX + labelWidth, y);
-    y += 4.2;
-    if (wordsLines.length > 1) {
-      doc.text(wordsLines.slice(1), marginX, y);
-      y += (wordsLines.length - 1) * 4.2;
-    }
-    y += 1.8;
-  }
-
-  // ---- Disclaimer (small italic notice, no boxed area) ----
-  doc.setFont("helvetica", "italic");
-  doc.setFontSize(7);
-  const note = doc.splitTextToSize(
-    "This is a customer-generated order request, not a confirmed invoice. Prices and stock are subject to the shop's confirmation.",
-    contentWidth
-  );
-  doc.text(note, marginX, y);
-  y += note.length * 3.3 + 3;
-
-  // ---- Signatures (compact two-column, minimal signing gap) ----
-  const rightColX = marginX + halfW;
-  y += 4;
-  doc.setDrawColor(180);
-  doc.setLineWidth(0.2);
-  doc.line(marginX, y, marginX + 60, y);
-  doc.line(rightColX, y, rightColX + 60, y);
-  y += 3.3;
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8);
-  doc.text("Authorized Signatory", marginX, y);
-  doc.text("Customer Signature", rightColX, y);
-
-  // ---- Footer with page numbers on every page ----
-  const totalPages = doc.internal.getNumberOfPages();
-  for (let p = 1; p <= totalPages; p++) {
-    doc.setPage(p);
-    doc.setDrawColor(200);
-    doc.setLineWidth(0.15);
-    doc.line(marginX, pageHeight - marginBottom - 3, marginX + contentWidth, pageHeight - marginBottom - 3);
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(7.5);
-    doc.text(`${CONFIG.shopName} | ${CONFIG.shopAddress}`, marginX, pageHeight - marginBottom);
-    doc.text(`Page ${p} of ${totalPages}`, pageWidth - marginX, pageHeight - marginBottom, { align: "right" });
-  }
-
-  const filename = buildOrderFilename(customerName, orderNo, now);
-  return { doc, orderNo, total, hasUnpriced, filename };
+  return { doc: result.doc, orderNo, total, hasUnpriced, filename: result.filename };
 }
 
 // Primary checkout action: tries to hand the PDF straight to WhatsApp via the
@@ -830,25 +599,63 @@ document.addEventListener("DOMContentLoaded", async () => {
     renderProducts();
   });
 
-  // Product grid clicks (event delegation: qty stepper + add to cart)
+  // Product grid clicks (event delegation: qty stepper, add to cart, view detail)
   document.getElementById("product-grid").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-action]");
-    if (!btn) return;
-    const { action, id } = btn.dataset;
+    if (btn) {
+      const { action, id } = btn.dataset;
+      if (action === "qty-inc") {
+        pendingQty[id] = (pendingQty[id] || 1) + 1;
+        renderProducts();
+      }
+      if (action === "qty-dec") {
+        pendingQty[id] = Math.max(1, (pendingQty[id] || 1) - 1);
+        renderProducts();
+      }
+      if (action === "add") {
+        addToCart(id, pendingQty[id] || 1);
+        pendingQty[id] = 1;
+        renderProducts();
+      }
+      return;
+    }
+    const viewTarget = e.target.closest('[data-action="view"]');
+    if (viewTarget) {
+      openProductDetail(viewTarget.dataset.id);
+    }
+  });
 
-    if (action === "qty-inc") {
+  // Product detail modal: close, gallery thumbnails, its own qty stepper + add
+  document.getElementById("detail-close").addEventListener("click", closeProductDetail);
+  document.getElementById("detail-overlay").addEventListener("click", closeProductDetail);
+  document.getElementById("detail-body").addEventListener("click", (e) => {
+    const thumb = e.target.closest(".detail-thumb");
+    if (thumb) {
+      const mainImg = document.getElementById("detail-main-img");
+      if (mainImg) mainImg.src = thumb.dataset.img;
+      document.querySelectorAll(".detail-thumb").forEach((t) => t.classList.remove("is-active"));
+      thumb.classList.add("is-active");
+      return;
+    }
+    const btn = e.target.closest("button[data-action]");
+    if (!btn || !currentDetailProductId) return;
+    const id = currentDetailProductId;
+    if (btn.dataset.action === "detail-qty-inc") {
       pendingQty[id] = (pendingQty[id] || 1) + 1;
-      renderProducts();
+      renderProductDetail(findProduct(id));
     }
-    if (action === "qty-dec") {
+    if (btn.dataset.action === "detail-qty-dec") {
       pendingQty[id] = Math.max(1, (pendingQty[id] || 1) - 1);
-      renderProducts();
+      renderProductDetail(findProduct(id));
     }
-    if (action === "add") {
+    if (btn.dataset.action === "detail-add") {
       addToCart(id, pendingQty[id] || 1);
       pendingQty[id] = 1;
-      renderProducts();
+      closeProductDetail();
     }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && currentDetailProductId) closeProductDetail();
   });
 
   // Cart panel open/close
