@@ -667,6 +667,8 @@ function downloadPaymentReceiptFor(orderNo) {
    ============================================================ */
 let editingOrder = null; // local editable copy of the order currently open
 let editingOrderNo = null;
+let editingItemIdx = null; // index of the item row currently in "click to edit" mode, or null
+let editingItemOriginalName = ""; // snapshot to restore on Cancel
 
 function openOrderDrawer(orderNo) {
   const order = ordersCache.find((o) => o.orderNo === orderNo);
@@ -684,6 +686,8 @@ function openOrderDrawer(orderNo) {
     status: order.status || "pending",
   };
   editingOrderNo = orderNo;
+  editingItemIdx = null;
+  editingItemOriginalName = "";
 
   renderOrderDrawer();
 
@@ -709,6 +713,8 @@ function closeOrderDrawer() {
   }, 200);
   editingOrder = null;
   editingOrderNo = null;
+  editingItemIdx = null;
+  editingItemOriginalName = "";
 }
 
 // Recomputes financials from the current editable state and updates just
@@ -749,6 +755,55 @@ function refreshOrderDrawerTotals() {
   }
 }
 
+// Builds the <tr> markup for the Ordered Products table. Row `editingItemIdx`
+// (if set) renders its product-name cell as an editable field with its own
+// Save/Cancel, so a naming typo can be fixed and saved without touching the
+// rest of the order or leaving the drawer.
+function buildItemsRowsHtml(items) {
+  return items
+    .map((it, i) => {
+      const lineTotal = it.price === null || it.price === undefined ? null : roundMoney(it.price * (Number(it.qty) || 0));
+      it.lineTotal = lineTotal;
+      const isEditingName = i === editingItemIdx;
+      const nameCell = isEditingName
+        ? `
+          <input type="text" value="${it.name}" data-field="name" data-idx="${i}" class="item-name-input" autofocus />
+          <div class="item-name-edit-actions">
+            <button type="button" class="text-link" data-action="save-item-name" data-idx="${i}">Save</button>
+            <button type="button" class="text-link" data-action="cancel-item-name" data-idx="${i}">Cancel</button>
+          </div>`
+        : `
+          <button type="button" class="item-name-btn" data-action="edit-item-name" data-idx="${i}" title="Click to edit product name">${it.name}</button>
+          ${it.sku ? `<div style="color:#8a9998;font-size:11px;">SKU: ${it.sku}</div>` : ""}`;
+      return `
+      <tr data-idx="${i}">
+        <td>${nameCell}</td>
+        <td><input type="number" min="1" step="1" value="${it.qty}" data-field="qty" data-idx="${i}" /></td>
+        <td><input type="number" min="0" step="0.01" value="${it.price === null ? "" : it.price}" placeholder="Quote" data-field="price" data-idx="${i}" /></td>
+        <td class="line-total-cell">${lineTotal === null ? "Quote" : formatPrice(lineTotal)}</td>
+        <td><button type="button" class="admin-delete" data-action="remove-item" data-idx="${i}">✕</button></td>
+      </tr>`;
+    })
+    .join("");
+}
+
+// Re-renders just the items table (not the whole drawer), so toggling a row
+// into/out of edit mode — or saving it — never disturbs whatever the admin
+// is doing elsewhere in the drawer (e.g. mid-edit on Previous Balance).
+function renderItemsTable() {
+  if (!editingOrder) return;
+  const tbody = document.getElementById("order-items-tbody");
+  if (!tbody) return;
+  tbody.innerHTML = buildItemsRowsHtml(editingOrder.items);
+  if (editingItemIdx !== null) {
+    const input = tbody.querySelector(`tr[data-idx="${editingItemIdx}"] .item-name-input`);
+    if (input) {
+      input.focus();
+      input.select();
+    }
+  }
+}
+
 function renderOrderDrawer() {
   const order = editingOrder;
   const body = document.getElementById("order-panel-body");
@@ -768,23 +823,7 @@ function renderOrderDrawer() {
   });
   order._financials = fin;
 
-  const itemsRowsHtml = order.items
-    .map((it, i) => {
-      const lineTotal = it.price === null || it.price === undefined ? null : roundMoney(it.price * (Number(it.qty) || 0));
-      it.lineTotal = lineTotal;
-      return `
-      <tr data-idx="${i}">
-        <td>
-          <input type="text" value="${it.name}" data-field="name" data-idx="${i}" />
-          ${it.sku ? `<span style="color:#8a9998;font-size:11px;">SKU: ${it.sku}</span>` : ""}
-        </td>
-        <td><input type="number" min="1" step="1" value="${it.qty}" data-field="qty" data-idx="${i}" /></td>
-        <td><input type="number" min="0" step="0.01" value="${it.price === null ? "" : it.price}" placeholder="Quote" data-field="price" data-idx="${i}" /></td>
-        <td class="line-total-cell">${lineTotal === null ? "Quote" : formatPrice(lineTotal)}</td>
-        <td><button type="button" class="admin-delete" data-action="remove-item" data-idx="${i}">✕</button></td>
-      </tr>`;
-    })
-    .join("");
+  const itemsRowsHtml = buildItemsRowsHtml(order.items);
 
   const productOptionsHtml = (productsCache || [])
     .map((p) => `<option value="${p.id}">${p.name} — ${formatPrice(p.price)}</option>`)
@@ -1407,6 +1446,53 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!confirm("Remove this product from the order?")) return;
       editingOrder.items.splice(Number(removeBtn.dataset.idx), 1);
       renderOrderDrawer();
+      return;
+    }
+
+    const editNameBtn = e.target.closest('[data-action="edit-item-name"]');
+    if (editNameBtn) {
+      const idx = Number(editNameBtn.dataset.idx);
+      editingItemIdx = idx;
+      editingItemOriginalName = editingOrder.items[idx].name;
+      renderItemsTable();
+      return;
+    }
+
+    const cancelNameBtn = e.target.closest('[data-action="cancel-item-name"]');
+    if (cancelNameBtn) {
+      const idx = Number(cancelNameBtn.dataset.idx);
+      if (editingOrder.items[idx]) editingOrder.items[idx].name = editingItemOriginalName;
+      editingItemIdx = null;
+      renderItemsTable();
+      return;
+    }
+
+    const saveNameBtn = e.target.closest('[data-action="save-item-name"]');
+    if (saveNameBtn) {
+      const idx = Number(saveNameBtn.dataset.idx);
+      const item = editingOrder.items[idx];
+      if (item && !String(item.name || "").trim()) {
+        alert("Product name can't be empty.");
+        return;
+      }
+      const statusEl = document.getElementById("od-save-status");
+      saveNameBtn.disabled = true;
+      saveNameBtn.textContent = "Saving…";
+      saveOrderEdits()
+        .then(() => {
+          editingItemIdx = null;
+          renderItemsTable();
+          if (statusEl) {
+            statusEl.className = "state-message";
+            statusEl.textContent = "Product name updated and saved.";
+            statusEl.hidden = false;
+          }
+        })
+        .catch((err) => {
+          saveNameBtn.disabled = false;
+          saveNameBtn.textContent = "Save";
+          alert("Could not save: " + err.message);
+        });
       return;
     }
 
