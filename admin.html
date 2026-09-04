@@ -774,7 +774,10 @@ function renderOrderDrawer() {
       it.lineTotal = lineTotal;
       return `
       <tr data-idx="${i}">
-        <td>${it.name}${it.sku ? `<br><span style="color:#8a9998;font-size:11px;">SKU: ${it.sku}</span>` : ""}</td>
+        <td>
+          <input type="text" value="${it.name}" data-field="name" data-idx="${i}" />
+          ${it.sku ? `<span style="color:#8a9998;font-size:11px;">SKU: ${it.sku}</span>` : ""}
+        </td>
         <td><input type="number" min="1" step="1" value="${it.qty}" data-field="qty" data-idx="${i}" /></td>
         <td><input type="number" min="0" step="0.01" value="${it.price === null ? "" : it.price}" placeholder="Quote" data-field="price" data-idx="${i}" /></td>
         <td class="line-total-cell">${lineTotal === null ? "Quote" : formatPrice(lineTotal)}</td>
@@ -1364,10 +1367,14 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
     const field = e.target.dataset.field;
-    if (field === "qty" || field === "price") {
+    if (field === "name" || field === "qty" || field === "price") {
       const idx = Number(e.target.dataset.idx);
       const item = editingOrder.items[idx];
       if (!item) return;
+      if (field === "name") {
+        item.name = e.target.value;
+        return; // doesn't affect totals, no need to refresh
+      }
       if (field === "qty") {
         item.qty = Math.max(1, Number(e.target.value) || 1);
       } else {
