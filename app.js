@@ -498,7 +498,7 @@ async function generateOrderNumber() {
   try {
     const nextNumber = await db.runTransaction(async (t) => {
       const snap = await t.get(counterRef);
-      const current = snap.exists ? snap.data().value : 3006;
+      const current = snap.exists ? snap.data().value : 2999;
       const next = current + 1;
       t.set(counterRef, { value: next }, { merge: true });
       return next;
