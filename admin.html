@@ -69,11 +69,11 @@
               <th>Order ID</th>
               <th>Shop Name</th>
               <th>Customer</th>
-              <th>Date/Time</th>
               <th>Total</th>
-              <th>Payment</th>
-              <th>Order Status</th>
+              <th>Payment Status</th>
+              <th>Payment In</th>
               <th>Balance</th>
+              <th>Order Status</th>
               <th></th>
             </tr>
           </thead>
@@ -276,8 +276,6 @@ function renderOrdersTable(orders) {
   empty.hidden = true;
 
   orders.forEach((order) => {
-    const date = order.createdAt && order.createdAt.toDate ? order.createdAt.toDate() : null;
-    const dateStr = date ? date.toLocaleDateString("en-IN") + " " + date.toLocaleTimeString("en-IN") : "—";
     const balanceRemaining = getBalanceRemainingOf(order);
     const paymentStatus = getPaymentStatusOf(order);
 
@@ -288,15 +286,15 @@ function renderOrdersTable(orders) {
       <td><strong>${order.orderNo}</strong></td>
       <td>${getShopNameOf(order) || "—"}</td>
       <td>${order.customerName || "—"}<br><span style="color:#8a9998;">${order.customerPhone || ""}</span></td>
-      <td>${dateStr}</td>
       <td>${formatPrice(getOrderTotalOf(order))}${order.hasUnpriced ? " +" : ""}</td>
       <td><span class="pay-badge ${paymentStatus === "paid" ? "pay-badge-paid" : paymentStatus === "partial" ? "pay-badge-advance" : "pay-badge-due"}">${paymentStatusLabel(paymentStatus)}</span></td>
+      <td>${formatPrice(getPaymentReceivedOf(order))}</td>
+      <td>${balanceRemaining < 0 ? "Advance " : ""}${formatPrice(Math.abs(balanceRemaining))}</td>
       <td>
         <select data-id="${order.orderNo}" class="status-select" data-no-row-open>
           ${STATUSES.map((s) => `<option value="${s}" ${s === order.status ? "selected" : ""}>${orderStatusLabel(s)}</option>`).join("")}
         </select>
       </td>
-      <td>${balanceRemaining < 0 ? "Advance " : ""}${formatPrice(Math.abs(balanceRemaining))}</td>
       <td>
         <button class="admin-delete" data-id="${order.orderNo}" data-no-row-open>Delete</button>
       </td>
